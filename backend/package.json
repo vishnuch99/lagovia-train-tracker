@@ -1,0 +1,19 @@
+{
+  "name": "lagovia-backend",
+  "version": "1.0.0",
+  "description": "Lagovia Train Tracker — Express API server",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "fuse.js": "^6.6.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
