@@ -1,4 +1,5 @@
 import { AlertCircle, MapPin, Clock } from 'lucide-react';
+import { TOTAL_ATTEMPTS } from '../hooks/useSearchDepartures.js';
 
 /**
  * DelayBadge — small colored pill showing on-time / delayed / cancelled status.
@@ -108,12 +109,16 @@ function StationCard({ station }) {
  * Android analogy: a Fragment that observes ViewModel state and switches between
  * different layouts (shimmer, error view, empty view, RecyclerView).
  */
-export default function DepartureList({ results, error, query, isLoading }) {
+export default function DepartureList({ results, error, query, isLoading, retryCount }) {
   if (isLoading) {
     return (
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3 animate-pulse">🚂</div>
-        <p className="text-sm">Fetching departures…</p>
+        <p className="text-sm">
+          {retryCount > 0
+            ? `Retrying… (attempt ${retryCount + 1} of ${TOTAL_ATTEMPTS})`
+            : 'Fetching departures…'}
+        </p>
       </div>
     );
   }

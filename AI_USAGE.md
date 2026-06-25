@@ -134,6 +134,73 @@ Identified four improvements and implemented all of them immediately:
 
 ---
 
+---
+
+### Turn 6 — Frontend failure handling deep dive
+
+**User prompt:**
+> "How do you handle failures on the front end? What is the retry strategy? Any exponential backoff? Maximum retries? Tell me everything. Do not implement anything until I say so."
+
+**Claude's response (summary):**
+Gave an honest audit: there was **zero retry logic** in the frontend. One attempt, then the error state showed permanently. Explained the two error paths (network failure vs HTTP error), confirmed no exponential backoff, no max retry count, no distinction between retryable and non-retryable errors, and no user-visible retry affordance. Described what a proper retry strategy would look like before any implementation.
+
+---
+
+### Turn 7 — Retry strategy: timeout-based vs fixed delays
+
+**User prompt:**
+> "I have a few ideas."
+> *(Selected: Retry strategy for frontend failures)*
+
+**Claude's response (summary):**
+Entered plan mode. Designed a full retry strategy plan: custom hook extraction (`useSearchDepartures`), MAX_RETRIES=3, exponential backoff 1s/2s/4s with ±200ms jitter, retryable errors (TypeError + 502/503), cancellation via `AbortController` + `cancelled` flag, and UI feedback showing "Retrying… (attempt N of 4)".
+
+---
+
+### Turn 8 — Timeout base for retry delays
+
+**User prompt:**
+> "The retry time should be based on the API timeout or the max timeout of our http call. Retry 1 should be after 1 timeout amount of time, 2nd retry after 2x of timeout, 3rd retry after 3x of timeout. Is that a good idea? What is the timeout on our network client right now?"
+
+**Claude's response (summary):**
+Identified that the **frontend `fetch` has no timeout at all** — the backend has 8s (stations) and 6s (liveboards) on axios, but the frontend just waits indefinitely. Explained why timeout-based retry delays are a valid server-to-server pattern but problematic here: (1) they conflate two different failure types — a connection-refused error fails in ~50ms but would still wait 6–10s before retrying; (2) the UX numbers become brutal (10s → 20s → 30s = up to 70s total). Recommended decoupling: add a 10s frontend timeout (so hung requests don't freeze the UI) but keep short fixed backoff (1s → 2s → 4s) since retry delay is about UX recovery, not server breathing room. User agreed.
+
+---
+
+### Turn 9 — Retry strategy implementation
+
+**User prompt:**
+> "Makes sense. Add a timeout on frontend also, and implement the retry strategy as we decided. Update AI usage document also with everything."
+
+**Claude's response (summary):**
+Implemented the full retry strategy plus the frontend timeout. Key technical details:
+
+**New file: `frontend/src/hooks/useSearchDepartures.js`**
+- Custom hook returning `{ results, isLoading, error, retryCount }`
+- `FETCH_TIMEOUT_MS = 10_000` — per-attempt timeout using `AbortSignal.timeout()`
+- `AbortSignal.any([controller.signal, timeoutSignal])` — combines query-cancel and per-attempt timeout signals without mutating the shared controller (each retry gets a fresh timeout while sharing one query-cancel controller)
+- Timeout vs query-change disambiguated by `timeoutSignal.aborted` — no boolean flag needed
+- `attempt` is a closure `let`, NOT React state (would re-trigger the effect)
+- `cancelled` flag guards all `setState` calls after any `await`
+- `retryTimerRef` (useRef) holds the retry setTimeout ID so cleanup can cancel a pending retry
+- Retryable: `TypeError`, `AbortError` where `timeoutSignal.aborted === true`, HTTP 502/503
+- Not retryable: query-change `AbortError`, HTTP 400/404/500
+- Cleanup: sets `cancelled=true`, clears debounce + retry timers, aborts controller, resets `isLoading` and `retryCount`
+
+**Modified: `frontend/src/App.jsx`**
+- Removed 3x useState + entire useEffect (~40 lines)
+- Replaced with `const { results, isLoading, error, retryCount } = useSearchDepartures(query)`
+- `query` stays in App state (owned by App, set by SearchBar)
+- Added `retryCount` prop to DepartureList
+
+**Modified: `frontend/src/components/DepartureList.jsx`**
+- Imports `TOTAL_ATTEMPTS` from hook file (avoids magic number)
+- Loading state shows "Retrying… (attempt N of 4)" when `retryCount > 0`
+
+**Files changed:** `frontend/src/hooks/useSearchDepartures.js` (new), `frontend/src/App.jsx`, `frontend/src/components/DepartureList.jsx`
+
+---
+
 ## Implementation Prompts / Approach
 
-No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time) were explained to the user using Android analogies before being implemented.
+No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach) were explained to the user using Android analogies before being implemented.
