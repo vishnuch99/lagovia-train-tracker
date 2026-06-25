@@ -22,9 +22,10 @@ export default function App() {
   /**
    * useEffect with [query] dependency = runs every time query changes.
    * Android analogy: this is a TextWatcher with debounce(350ms) feeding into
-   * a CoroutineScope.launch block. The cleanup function (return () => ...) cancels
-   * the previous timer if the user types again before it fires — exactly like
-   * cancelling a previous coroutine Job before launching a new one.
+   * a CoroutineScope.launch block. The cleanup function cancels both the debounce
+   * timer AND any in-flight fetch via AbortController — equivalent to calling
+   * job.cancel() before launching a new coroutine. Without the abort, a slow
+   * response for an old query could arrive after a newer one and overwrite it.
    */
   useEffect(() => {
     if (query.trim().length < 3) {
@@ -33,11 +34,15 @@ export default function App() {
       return;
     }
 
+    const controller = new AbortController();
+
     const timer = setTimeout(async () => {
       setIsLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/departures?q=${encodeURIComponent(query.trim())}`);
+        const res = await fetch(`/departures?q=${encodeURIComponent(query.trim())}`, {
+          signal: controller.signal,
+        });
         const data = await res.json();
         if (!res.ok) {
           setError(data.error || 'Something went wrong');
@@ -45,7 +50,8 @@ export default function App() {
         } else {
           setResults(data);
         }
-      } catch {
+      } catch (err) {
+        if (err.name === 'AbortError') return; // intentional cancel, not a user-facing error
         setError('Network error — could not reach the server. Is the backend running?');
         setResults(null);
       } finally {
@@ -53,7 +59,10 @@ export default function App() {
       }
     }, 350);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query]);
 
   return (

@@ -2,15 +2,45 @@ const axios = require('axios');
 const Fuse = require('fuse.js');
 
 const IRAIL_BASE = 'https://api.irail.be';
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes — station list changes rarely
+const CACHE_TTL_MS = 10 * 60 * 1000;      // 10 minutes — station list changes rarely
+const LIVEBOARD_TTL_MS = 30 * 1000;        // 30 seconds — live data, but don't hammer iRail
+const MAX_CONCURRENT_LIVEBOARDS = 5;       // cap parallel iRail calls per incoming request
 
 let stationsCache = null;
 let stationsCachedAt = 0;
 
+// Per-station liveboard cache: stationAtId → { data, cachedAt }
+const liveboardCache = new Map();
+
+/**
+ * Simple concurrency limiter — equivalent to a Semaphore(N) in Java/Kotlin.
+ * Keeps at most `max` promises running simultaneously; queues the rest.
+ * Written inline to avoid an npm dependency for ~15 lines of code.
+ */
+function makeLimiter(max) {
+  let active = 0;
+  const queue = [];
+  const run = () => {
+    if (queue.length === 0 || active >= max) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    fn()
+      .then(resolve, reject)
+      .finally(() => { active--; run(); });
+  };
+  return (fn) => new Promise((resolve, reject) => {
+    queue.push({ fn, resolve, reject });
+    run();
+  });
+}
+
+const liveboardLimiter = makeLimiter(MAX_CONCURRENT_LIVEBOARDS);
+
 /**
  * Fetches the full list of Belgian stations from iRail.
- * Results are cached in memory for CACHE_TTL_MS to avoid hammering the API.
- * Android analogy: this is the Repository layer with a simple in-memory cache.
+ * Results are cached in memory for CACHE_TTL_MS.
+ * If the refresh fails but we have stale data, we serve it rather than throwing —
+ * a transient iRail blip shouldn't kill all searches.
  */
 async function getStations() {
   const now = Date.now();
@@ -18,14 +48,23 @@ async function getStations() {
     return stationsCache;
   }
 
-  const response = await axios.get(`${IRAIL_BASE}/stations/`, {
-    params: { format: 'json', lang: 'en' },
-    timeout: 8000,
-  });
-
-  stationsCache = response.data.station;
-  stationsCachedAt = Date.now();
-  return stationsCache;
+  try {
+    const response = await axios.get(`${IRAIL_BASE}/stations/`, {
+      params: { format: 'json', lang: 'en' },
+      timeout: 8000,
+    });
+    stationsCache = response.data.station;
+    stationsCachedAt = Date.now();
+    return stationsCache;
+  } catch (err) {
+    if (stationsCache) {
+      // Serve stale data rather than propagating the error upward.
+      // The station list changes very rarely, so stale is almost always correct.
+      console.warn('[irail] Station refresh failed; serving stale cache:', err.message);
+      return stationsCache;
+    }
+    throw err; // no cache at all — nothing to serve, must fail
+  }
 }
 
 /**
@@ -59,15 +98,32 @@ function searchStations(stations, query) {
 }
 
 /**
- * Fetches the live departure board for a single station.
- * Uses the station's @id URI (the canonical identifier iRail uses internally).
+ * Fetches the live departure board for a single station, with a 30-second cache.
+ * Repeated searches for the same station within the window skip the iRail call entirely.
+ * The limiter ensures at most MAX_CONCURRENT_LIVEBOARDS calls run in parallel.
  */
 async function getLiveboard(stationAtId) {
-  const response = await axios.get(`${IRAIL_BASE}/liveboard/`, {
-    params: { id: stationAtId, format: 'json', lang: 'en', alerts: 'true' },
-    timeout: 6000,
+  const now = Date.now();
+  const cached = liveboardCache.get(stationAtId);
+  if (cached && now - cached.cachedAt < LIVEBOARD_TTL_MS) {
+    return cached.data;
+  }
+
+  return liveboardLimiter(async () => {
+    // Re-check cache inside the limiter — another concurrent call for the same
+    // station may have populated it while this one was queued.
+    const rechecked = liveboardCache.get(stationAtId);
+    if (rechecked && Date.now() - rechecked.cachedAt < LIVEBOARD_TTL_MS) {
+      return rechecked.data;
+    }
+
+    const response = await axios.get(`${IRAIL_BASE}/liveboard/`, {
+      params: { id: stationAtId, format: 'json', lang: 'en', alerts: 'true' },
+      timeout: 6000,
+    });
+    liveboardCache.set(stationAtId, { data: response.data, cachedAt: Date.now() });
+    return response.data;
   });
-  return response.data;
 }
 
 /**

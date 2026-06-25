@@ -98,6 +98,42 @@ Implemented the full project, creating the following files from scratch:
 
 ---
 
+---
+
+### Turn 4 — Failure handling explanation
+
+**User prompt:**
+> "How did you handle the failures?"
+
+**Claude's response (summary):**
+Explained the three backend layers and one frontend layer:
+1. **Per-station partial failure** — `Promise.allSettled` at `departures.js:74`. If one of 17 parallel iRail liveboard calls fails, that station gets an empty `departures: []` plus a `fetchError` string; all other stations still render. Android analogy: `awaitAll()` on a list of `Deferred`, each individually caught.
+2. **Total upstream failure** — outer `try/catch` at `departures.js:57`. If the station list call fails completely, returns `502 UPSTREAM_ERROR`.
+3. **Axios timeouts** — `irail.js` configures `timeout: 8000` (station list) and `timeout: 6000` (liveboards). Hung connections become rejections that feed into layers 1 and 2.
+4. **Frontend network failure** — `App.jsx` `catch` block distinguishes `fetch` throwing (server unreachable) from `res.ok === false` (HTTP error).
+
+---
+
+### Turn 5 — Resilience improvements
+
+**User prompt:**
+> "What else can we do to make this resilient?"
+
+**Claude's response (summary):**
+Identified four improvements and implemented all of them immediately:
+
+1. **`AbortController` in `App.jsx`** — Correctness bug fix. Without this, a slow response for an old query could arrive after a newer one and overwrite it. The `useEffect` cleanup now calls both `clearTimeout(timer)` and `controller.abort()`, so the in-flight fetch is cancelled whenever the query changes. Android analogy: `job.cancel()` before launching a new coroutine.
+
+2. **Stale station cache fallback in `getStations()`** — If the 10-minute cache refresh fails (iRail transient error), the old station list is served instead of throwing. A `console.warn` is emitted. Only throws if there is no cache at all.
+
+3. **Per-station liveboard cache (30s TTL)** — `getLiveboard()` now checks a `Map` before making an HTTP call. Searching "Bru" twice within 30 seconds goes from 34 iRail calls to 0. Includes a double-check inside the limiter to handle concurrent callers racing to populate the same cache entry.
+
+4. **Concurrency limiter on liveboard calls** — `makeLimiter(5)` is a ~15-line inline semaphore (no new dependency). At most 5 iRail liveboard calls run simultaneously; the rest queue behind them. Android analogy: `Semaphore(5)` from `java.util.concurrent`.
+
+**Files changed:** `frontend/src/App.jsx`, `backend/src/services/irail.js`
+
+---
+
 ## Implementation Prompts / Approach
 
 No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time) were explained to the user using Android analogies before being implemented.
