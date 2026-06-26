@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
 
   if (query.length < 3) {
     return res.status(400).json({
-      error: 'Query must be at least 3 characters',
+      error: 'Input is incomplete',
       code: 'QUERY_TOO_SHORT',
     });
   }
@@ -79,14 +79,14 @@ router.get('/', async (req, res) => {
           send({
             type: 'station',
             stationId: station.id,
-            stationName: station.name,
+            stationName: station.displayName,
             departures: filtered.map(formatDeparture),
           });
         } catch {
           send({
             type: 'station',
             stationId: station.id,
-            stationName: station.name,
+            stationName: station.displayName,
             departures: [],
             fetchError: 'Could not load departures for this station',
           });

@@ -186,16 +186,24 @@ function searchStations(stations, query) {
       (s.standardname && s.standardname.toLowerCase().includes(lowerQuery))
   );
 
-  if (substringMatches.length > 0) return substringMatches;
+  if (substringMatches.length > 0) {
+    return substringMatches.map((s) => ({
+      ...s,
+      // Show whichever field contains the query — the user typed a substring of it,
+      // so that's what they should see as the station title.
+      displayName: s.name.toLowerCase().includes(lowerQuery) ? s.name : s.standardname,
+    }));
+  }
 
-  // No substring matches — run fuzzy as a typo-tolerance fallback only
+  // No substring matches — run fuzzy as a typo-tolerance fallback only.
+  // Fuzzy corrects typos so we always show the canonical name, not standardname.
   const fuse = new Fuse(stations, {
     keys: ['name', 'standardname'],
     threshold: 0.35,
     distance: 100,
     minMatchCharLength: 3,
   });
-  return fuse.search(query).map((r) => r.item);
+  return fuse.search(query).map((r) => ({ ...r.item, displayName: r.item.name }));
 }
 
 /**

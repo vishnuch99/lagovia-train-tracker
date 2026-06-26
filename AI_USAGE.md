@@ -324,6 +324,93 @@ Re-implemented retry logic adapted for SSE in `useSearchDepartures.js`:
 
 ---
 
+### Turn 14 — Five spec-compliance and UX improvements
+
+**User prompt (message 1):**
+> Here is the link to the assessment: /Users/vishnu/Downloads/Technical_Challenge_Lagovia_Train_Tracker.pdf
+>
+> 1. Allow less than 3 character inputs and show an error message that says "Input is incomplete". The assessment explicitly asks for that.
+> 2. Replace "Platform" with a "delay" column to the card view. The assessment explicitly asks for that. Delay should be in minutes. If there is no delay, show 0. Make it look consistent with the other items on the card.
+> 3. Show Status as "On Time" with a green card, "Delayed" with a yellow card, or "Cancelled" with a red card. No other status allowed.
+> 4. For stations with no departures, show a card that says there are no departures. Do not show the static "15 stations matched, but none have upcoming departures" message that is being used right now. People want to explicitly know information about each particular station.
+> 5. On the landing page initially, fetch the list of stations immediately and populate the cache. Do not wait for the user to type something. Show a static card of the list of stations below the search bar if the search bar is empty. Once the fetching starts, it should not appear. When the search bar is empty, it should come back. If this works, remove the "Try "Bru", "Gent", "Ant", or "Liège"" message and the "e.g." part in the search box hint.
+> Think through each of these changes and give me feedback about it and an explicit answer to whether you recommend doing it or not. Take as long as you want. Think through all aspects like upstream failures, UI/UX, scale, everything. Be brutally honest.
+
+**User prompt (message 2, after analysis):**
+> Okay I did not realise there are 714 stations. Of course, do not show any of them now. Let the hint be as is. Implement everything else but 5b. Just one change in 1: The assessment explicitly asks to "return an error response indicating input is incomplete". So, add a submit button and let the user click enter to submit. Handle the explicit error from backend and show it.
+
+**Analysis (Claude's response before implementation):**
+
+1. **< 3 char error** — Required by spec. Frontend was silently ignoring short queries; showing no error. Needed to satisfy "explicit error response indicating input is incomplete."
+2. **Delay column** — Required by spec ("Delay in minutes, 0 = on time"). Platform column is not in spec. Simple swap.
+3. **Status: On Time / Delayed / Cancelled** — Clean categorical status. Works with the separate numeric Delay column.
+4. **Empty station cards** — More honest than one aggregate message. Each matched station gets its own card even with 0 departures.
+5a. **Backend prefetch on startup** — Warms the 10-min station cache immediately. First search is instant.
+5b. **714-station list in UI** — Rejected after learning there are 714 stations. Too many to show without virtualization; not in spec requirements.
+
+**Implementation:**
+
+**Change 1 — Submit-triggered search + backend error display:**
+- `SearchBar` converted to a `<form>` with a Submit button; Enter key submits via `onSubmit`.
+- `App` split into `inputValue` (live typing) and `submission: { query, id }` (explicit submit). Using an object with `id: Date.now()` means re-submitting the same query still triggers a fresh effect.
+- `useSearchDepartures` now takes `submission` (null = idle) instead of a live `query` string. No debounce needed.
+- Switched from `EventSource` to `fetch`-based SSE streaming. Reason: `EventSource.onerror` gives no access to the HTTP status code or response body — impossible to display "Input is incomplete" from the backend. `fetch` returns the response object; a 400 response body is read with `.json()` and the `error` field is shown directly. 4xx errors are not retried (the request was understood; the input is the problem).
+
+**Change 2 — Delay column replaces Platform:**
+- New column "Delay" shows `dep.delayMinutes` as `"N min"` (including `"0 min"` for on-time trains).
+- `hasPlatform` conditional logic removed. All station cards now have a consistent 5-column layout: Train | Destination | Scheduled | Delay | Status.
+
+**Change 3 — Status: On Time / Delayed / Cancelled:**
+- `DelayBadge` renamed `StatusBadge`. Now shows exactly three states: green "On Time" (`delayMinutes === 0`), amber "Delayed" (`delayMinutes > 0`), red "Cancelled".
+- "+N min" removed from Status — the numeric delay is now in the Delay column.
+
+**Change 4 — Empty station cards:**
+- Removed frontend filter `departures.length > 0 || fetchError` from `useSearchDepartures`. Every matched station is now added to `stationsRef` regardless of departure count.
+- `StationCard` shows "No departures in the next 15 minutes" inside the card when `departures.length === 0 && !fetchError`.
+- The aggregate "N stations matched but none have upcoming departures" message is gone. Each station reports its own status.
+
+**Change 5a — Backend station prefetch on startup:**
+- `backend/src/index.js` calls `getStations()` immediately after the server binds to the port. The 10-minute TTL cache is warm before the first user search. On failure (iRail down at startup), logs a warning and continues — cache will populate on first actual search.
+
+**Files changed:** `backend/src/index.js`, `backend/src/routes/departures.js`, `frontend/src/App.jsx`, `frontend/src/components/SearchBar.jsx`, `frontend/src/hooks/useSearchDepartures.js`, `frontend/src/components/DepartureList.jsx`
+
+---
+
+---
+
+### Turn 15 — Display name, stream timeout fix, station sort
+
+**User prompt:**
+> 1. Show whatever is being matched as the station name above the card. If it is matching because of standard name, the title should be standard name. If it is name, then it should be name. The user should see only the string that has a substring of their typed string. 2. The behaviour is inconsistent. Either the search is not working properly, or the streaming is not. First time I searched for 'lle' I got 23 stations, then 24, then 43. I never got 59. I am waiting until 'Loading more stations' disappears. Okay I think I figured it out. The call is timing out after 10s. So whatever stations I am getting within the 10s, those are the only ones visible here. Fix this. The timeout should be 10s per response, not 10s for the entire stream. 3. UI change: On loading every card, sort it according to the scheduled time of each departure. A station with 7:30 departure should show up above the one with an 8:00 departure. Empty cards should be at the bottom. As always, take as long as you need to fix these. Do not rush. Plan first, give me feedback, then implement only after my approval.
+
+**Claude's analysis (before implementation):**
+
+**Fix 1 — Display name:**
+`searchStations()` already checks both `name` and `standardname` for a substring match but always returned the raw station object with `name` as the card title. The root cause is that the route always passed `station.name` as `stationName`, regardless of which field matched. Fix: tag each result with `displayName` in `searchStations()` — if `name` contains the query, `displayName = name`; if only `standardname` does, `displayName = standardname`. Fuzzy fallback always uses `name` since it's correcting a typo and the canonical name is more useful than standardname. The route emits `station.displayName` as `stationName`.
+
+**Fix 2 — Stream timeout root cause:**
+`AbortSignal.timeout(10000)` was passed into `AbortSignal.any([queryController.signal, timeoutSignal])` and that combined signal was passed to `fetch(url, { signal })`. The MDN spec says the `signal` option on `fetch` controls the entire request lifecycle including body reads. So after 10s from creation, the signal fired and killed `reader.read()` mid-stream. The hook's `catch` block saw `stationsRef.current.length > 0` (some stations had arrived), so it stopped gracefully — this is why "Loading more stations…" disappeared correctly but fewer stations than expected were shown. Different run counts (23 / 24 / 43) were different snapshots of how many stations finished in 10s across retry attempts with varying network speed. Fix: replace `AbortSignal.timeout()` with a manual `setTimeout` + `AbortController`. Clear the timer with `clearTimeout()` immediately once `response.ok` is confirmed. From that point, only `queryController` (query change) can cancel — the body reads indefinitely.
+
+**Fix 3 — Station sort:**
+Sorting happens in the frontend hook's `station` event handler — the backend can't sort by earliest departure because it doesn't wait for all liveboards before streaming. Sort key: `Math.min(...departures.map(d => d.scheduledTimestamp))`. Empty and error stations (no departures) use `Infinity` so they sink to the bottom. Departures within each card are also sorted by `scheduledTimestamp` for consistency. The sort runs on every station event so cards visually reorder as new ones stream in.
+
+**Implementation:**
+
+**`backend/src/services/irail.js`:**
+- `searchStations()` now maps each substring result to `{ ...station, displayName }` where `displayName = name` if name matches, else `displayName = standardname`. Fuzzy results: `displayName = name`.
+
+**`backend/src/routes/departures.js`:**
+- Both `send()` calls (success and error paths) use `station.displayName` instead of `station.name` as `stationName`.
+
+**`frontend/src/hooks/useSearchDepartures.js`:**
+- Replaced `AbortSignal.timeout(CONNECT_TIMEOUT_MS)` with `const connectTimeoutController = new AbortController()` + `const connectTimeoutId = setTimeout(() => connectTimeoutController.abort(), CONNECT_TIMEOUT_MS)`. The combined signal is `AbortSignal.any([queryController.signal, connectTimeoutController.signal])`.
+- `clearTimeout(connectTimeoutId)` called in two places: (1) in the `fetch` catch (timeout fired → retry), (2) immediately after the `fetch` resolves with a response.
+- In the `station` event handler: departures are sorted by `scheduledTimestamp` before storing. The full `stationsRef.current` array is sorted by earliest departure min after each new station is appended.
+
+**Files changed:** `backend/src/services/irail.js`, `backend/src/routes/departures.js`, `frontend/src/hooks/useSearchDepartures.js`
+
+---
+
 ## Implementation Prompts / Approach
 
 No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach, iRail API best practices) were explained to the user before being implemented.

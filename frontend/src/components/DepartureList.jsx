@@ -1,7 +1,7 @@
 import { AlertCircle, MapPin, Clock } from 'lucide-react';
 import { TOTAL_ATTEMPTS } from '../hooks/useSearchDepartures.js';
 
-function DelayBadge({ delayMinutes, cancelled }) {
+function StatusBadge({ delayMinutes, cancelled }) {
   if (cancelled) {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800">
@@ -12,22 +12,21 @@ function DelayBadge({ delayMinutes, cancelled }) {
   if (delayMinutes === 0) {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-800">
-        On time
+        On Time
       </span>
     );
   }
   return (
     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">
-      +{delayMinutes} min
+      Delayed
     </span>
   );
 }
 
 function StationCard({ station }) {
-  const hasPlatform = station.departures.some((d) => d.platform);
-
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-4 overflow-hidden">
+      {/* Station header */}
       <div className="px-4 py-3 bg-slate-50 border-b border-gray-100 flex items-center gap-2">
         <MapPin size={15} className="text-slate-500 shrink-0" />
         <h2 className="font-semibold text-slate-800">{station.stationName}</h2>
@@ -36,6 +35,7 @@ function StationCard({ station }) {
         </span>
       </div>
 
+      {/* Fetch error for this station */}
       {station.fetchError && (
         <div className="px-4 py-3 text-sm text-red-600 flex items-center gap-2">
           <AlertCircle size={15} className="shrink-0" />
@@ -43,6 +43,14 @@ function StationCard({ station }) {
         </div>
       )}
 
+      {/* No departures in window */}
+      {station.departures.length === 0 && !station.fetchError && (
+        <div className="px-4 py-6 text-center text-sm text-gray-400">
+          No departures in the next 15 minutes
+        </div>
+      )}
+
+      {/* Departures table */}
       {station.departures.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -51,8 +59,8 @@ function StationCard({ station }) {
                 <th className="px-4 py-2">Train</th>
                 <th className="px-4 py-2">Destination</th>
                 <th className="px-4 py-2">Scheduled</th>
+                <th className="px-4 py-2">Delay</th>
                 <th className="px-4 py-2">Status</th>
-                {hasPlatform && <th className="px-4 py-2">Platform</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -70,12 +78,12 @@ function StationCard({ station }) {
                   <td className="px-4 py-3 text-gray-700 tabular-nums whitespace-nowrap">
                     {dep.scheduledTime}
                   </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <DelayBadge delayMinutes={dep.delayMinutes} cancelled={dep.cancelled} />
+                  <td className="px-4 py-3 tabular-nums text-gray-700 whitespace-nowrap">
+                    {dep.delayMinutes} min
                   </td>
-                  {hasPlatform && (
-                    <td className="px-4 py-3 text-gray-500">{dep.platform ?? '—'}</td>
-                  )}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <StatusBadge delayMinutes={dep.delayMinutes} cancelled={dep.cancelled} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -87,20 +95,16 @@ function StationCard({ station }) {
 }
 
 /**
- * DepartureList — renders the full results area below the search bar.
+ * DepartureList — renders the full results area.
  *
  * States:
  *   isLoading && !results  → full-page spinner (waiting for first station)
- *   results + isStreaming  → partial results visible, more arriving (indicator at bottom)
- *   results + !isStreaming → complete results
- *   error                 → error banner
- *   idle                  → search prompt
- *
- * Android analogy: a Fragment that observes a Flow — renders whatever has
- * arrived so far and shows a footer indicator while more items are coming.
+ *   results + isStreaming  → partial results + "Loading more…" footer
+ *   results                → complete results
+ *   error                  → error banner (includes backend validation messages)
+ *   idle (!results, !error, !isLoading) → search prompt
  */
-export default function DepartureList({ results, error, query, isLoading, isStreaming, retryCount }) {
-  // Full-page spinner: waiting for the very first station to arrive
+export default function DepartureList({ results, error, isLoading, isStreaming, retryCount }) {
   if (isLoading && !results) {
     return (
       <div className="text-center py-16 text-gray-400">
@@ -133,21 +137,16 @@ export default function DepartureList({ results, error, query, isLoading, isStre
     );
   }
 
-  // Results arrived but all stations had no departures (and streaming is done)
+  // No station matched the query at all
   if (results.stations.length === 0 && !isStreaming) {
-    const noStations = results.totalStationsMatched === 0;
     return (
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3">🚉</div>
         <p className="font-medium text-gray-600">
-          {noStations
-            ? `No stations found matching "${results.query}"`
-            : 'No departures in the next 15 minutes'}
+          No stations found matching "{results.query}"
         </p>
         <p className="text-sm mt-1 text-gray-400">
-          {noStations
-            ? 'Try a different search term or check the spelling'
-            : `${results.totalStationsMatched} station${results.totalStationsMatched !== 1 ? 's' : ''} matched, but none have upcoming departures`}
+          Try a different search term or check the spelling
         </p>
       </div>
     );
@@ -175,7 +174,6 @@ export default function DepartureList({ results, error, query, isLoading, isStre
         <StationCard key={station.stationId} station={station} />
       ))}
 
-      {/* Shown while more station results are still streaming in */}
       {isStreaming && (
         <div className="text-center py-4 text-sm text-gray-400 animate-pulse">
           Loading more stations…

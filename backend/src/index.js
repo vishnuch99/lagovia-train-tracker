@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const departuresRouter = require('./routes/departures');
+const { getStations } = require('./services/irail');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -15,4 +16,6 @@ app.get('/health', (_, res) => res.json({ status: 'ok' }));
 
 app.listen(PORT, () => {
   console.log(`Lagovia backend running on http://localhost:${PORT}`);
+  // Warm the station cache immediately so the first search doesn't pay the iRail round-trip
+  getStations().catch((err) => console.warn('[startup] Station prefetch failed:', err.message));
 });

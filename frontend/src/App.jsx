@@ -5,16 +5,30 @@ import DepartureList from './components/DepartureList.jsx';
 import { useSearchDepartures } from './hooks/useSearchDepartures.js';
 
 /**
- * App is the root component — think of it as your MainActivity.
- * It owns `query` (driven by SearchBar) and passes the derived fetch state
- * from useSearchDepartures down to DepartureList as props.
+ * App is the root component — equivalent to MainActivity.
  *
- * All fetch/retry/timeout logic lives in useSearchDepartures — keeping this
- * component as a pure layout-and-wiring layer.
+ * State split:
+ *   inputValue   — what's currently typed in the box (live)
+ *   submission   — { query, id } set on explicit submit; id=Date.now() ensures
+ *                  re-submitting the same query still triggers a fresh search
+ *
+ * Android analogy: inputValue is the EditText buffer; submission is the intent
+ * fired when the user taps Search, carrying the current query as an extra.
  */
 export default function App() {
-  const [query, setQuery] = useState('');
-  const { results, isLoading, isStreaming, error, retryCount } = useSearchDepartures(query);
+  const [inputValue, setInputValue] = useState('');
+  const [submission, setSubmission] = useState(null);
+
+  const { results, isLoading, isStreaming, error, retryCount } = useSearchDepartures(submission);
+
+  function handleSubmit() {
+    setSubmission({ query: inputValue, id: Date.now() });
+  }
+
+  function handleClear() {
+    setInputValue('');
+    setSubmission(null);
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -31,11 +45,16 @@ export default function App() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
-        <SearchBar query={query} onChange={setQuery} isLoading={isLoading} />
+        <SearchBar
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          onClear={handleClear}
+          isLoading={isLoading}
+        />
         <DepartureList
           results={results}
           error={error}
-          query={query}
           isLoading={isLoading}
           isStreaming={isStreaming}
           retryCount={retryCount}

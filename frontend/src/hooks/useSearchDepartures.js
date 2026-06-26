@@ -3,10 +3,9 @@ import { useState, useEffect, useRef } from 'react';
 export const MAX_RETRIES = 3;
 export const TOTAL_ATTEMPTS = MAX_RETRIES + 1;
 
-const DEBOUNCE_MS = 350;
-const BASE_DELAY_MS = 1000;    // retry 1: ~1s, retry 2: ~2s, retry 3: ~4s
-const JITTER_MS = 200;         // ±200ms so multiple clients don't lockstep
-const CONNECT_TIMEOUT_MS = 10_000; // if no 'meta' event within 10s, treat as failure
+const BASE_DELAY_MS = 1000;   // retry 1: ~1s, retry 2: ~2s, retry 3: ~4s
+const JITTER_MS = 200;        // ±200ms to prevent retry lockstep
+const CONNECT_TIMEOUT_MS = 10_000;
 
 function backoffDelay(attemptIndex) {
   const base = BASE_DELAY_MS * Math.pow(2, attemptIndex);
@@ -15,21 +14,30 @@ function backoffDelay(attemptIndex) {
 }
 
 /**
- * useSearchDepartures — streams departure results via Server-Sent Events.
+ * useSearchDepartures — streams departure results via fetch-based SSE.
  *
- * Android analogy: a Flow<List<StationResult>> with automatic retry — emits
- * partial results as each station's liveboard resolves, retries on connection
- * failure (before any data arrives), and stops gracefully if a mid-stream drop
- * occurs after partial results are already visible.
+ * Why fetch instead of EventSource: EventSource gives no access to the HTTP
+ * status code or response body on error (onerror fires with no detail).
+ * Using fetch lets us read the 400 "Input is incomplete" response body and
+ * display it directly, which is required by the spec.
  *
- * @param {string} query The current search string (owned by App state).
+ * @param {{ query: string, id: number } | null} submission
+ *   null  = idle (no search yet, or cleared)
+ *   object = an explicit submit; `id` ensures re-submitting the same query
+ *            still triggers a fresh effect run.
+ *
  * @returns {{ results, isLoading, isStreaming, error, retryCount }}
  *
- * isLoading:   true while waiting for the first station (full-page spinner)
- * isStreaming: true while more stations are still arriving
- * retryCount:  0 on first attempt, 1–3 during retries (drives "Retrying…" UI)
+ * Retry policy (before any data arrives):
+ *   Retryable:     network failure, connect timeout
+ *   Not retryable: HTTP 4xx (bad input), HTTP 5xx (server bug)
+ *   Max retries:   MAX_RETRIES (3), i.e. 4 total attempts
+ *   Backoff:       1s → 2s → 4s with ±200ms jitter
+ *
+ * Mid-stream drop (after stations start arriving): stop gracefully rather
+ * than restarting, since partial results are already visible.
  */
-export function useSearchDepartures(query) {
+export function useSearchDepartures(submission) {
   const [results, setResults] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -41,7 +49,7 @@ export function useSearchDepartures(query) {
   const retryTimerRef = useRef(null);
 
   useEffect(() => {
-    if (query.trim().length < 3) {
+    if (submission === null) {
       setResults(null);
       setError(null);
       setIsLoading(false);
@@ -49,6 +57,8 @@ export function useSearchDepartures(query) {
       setRetryCount(0);
       return;
     }
+
+    const { query } = submission;
 
     setIsLoading(true);
     setIsStreaming(true);
@@ -60,93 +70,144 @@ export function useSearchDepartures(query) {
 
     let cancelled = false;
     let attempt = 0;
-    let esRef = null; // current EventSource, kept so cleanup can close it
+    const queryController = new AbortController();
 
-    function connect() {
-      const url = `/departures?q=${encodeURIComponent(query.trim())}`;
-      const es = new EventSource(url);
-      esRef = es;
+    async function connect() {
+      const url = `/departures?q=${encodeURIComponent(query)}`;
 
-      let receivedMeta = false;
+      // Connect timeout: applies only to getting the first response headers.
+      // Once response.ok is confirmed we clear it so the stream reads indefinitely.
+      // Using manual setTimeout+AbortController instead of AbortSignal.timeout() because
+      // AbortSignal.timeout() stays active and kills reader.read() mid-stream after 10s.
+      const connectTimeoutController = new AbortController();
+      const connectTimeoutId = setTimeout(
+        () => connectTimeoutController.abort(),
+        CONNECT_TIMEOUT_MS
+      );
+      const signal = AbortSignal.any([queryController.signal, connectTimeoutController.signal]);
 
-      // If the backend doesn't respond at all within 10s, treat it as a failure.
-      // EventSource itself never times out — we have to enforce this manually.
-      const connectTimeout = setTimeout(() => {
-        if (!receivedMeta && !cancelled) {
-          es.close();
-          handleFailure();
-        }
-      }, CONNECT_TIMEOUT_MS);
+      let response;
+      try {
+        response = await fetch(url, { signal });
+      } catch (err) {
+        clearTimeout(connectTimeoutId);
+        if (queryController.signal.aborted) return; // query changed — stop
+        scheduleRetry(); // network error or connect timeout — worth retrying
+        return;
+      }
 
-      es.onmessage = (event) => {
-        if (cancelled) return;
-        const data = JSON.parse(event.data);
+      // Headers received — stop the connect timer so it doesn't kill body reads.
+      clearTimeout(connectTimeoutId);
 
-        if (data.type === 'meta') {
-          receivedMeta = true;
-          clearTimeout(connectTimeout);
-          // Successfully connected — reset retry counter so UI shows clean state
-          attempt = 0;
-          setRetryCount(0);
-          metaRef.current = {
-            query: data.query,
-            generatedAt: data.generatedAt,
-            totalStationsMatched: data.totalStationsMatched,
-          };
-          stationsRef.current = [];
-
-        } else if (data.type === 'station') {
-          if (data.departures.length > 0 || data.fetchError) {
-            stationsRef.current = [
-              ...stationsRef.current,
-              {
-                stationId: data.stationId,
-                stationName: data.stationName,
-                departures: data.departures,
-                fetchError: data.fetchError,
-              },
-            ];
-          }
-          if (stationsRef.current.length > 0) {
-            setIsLoading(false);
-            setResults({ ...metaRef.current, stations: stationsRef.current });
-          }
-
-        } else if (data.type === 'done') {
-          clearTimeout(connectTimeout);
-          es.close();
-          setIsStreaming(false);
-          setIsLoading(false);
-          if (metaRef.current && stationsRef.current.length === 0) {
-            setResults({ ...metaRef.current, stations: [] });
-          }
-
-        } else if (data.type === 'error') {
-          clearTimeout(connectTimeout);
-          es.close();
-          setError(data.error);
+      if (!response.ok) {
+        // HTTP error — read the JSON body to surface the backend's message.
+        // 400 = "Input is incomplete" (spec requirement).
+        // Do not retry: the request was understood; the input is the problem.
+        const body = await response.json().catch(() => ({}));
+        if (!cancelled) {
+          setError(body.error || `Server error (${response.status})`);
           setIsLoading(false);
           setIsStreaming(false);
         }
-      };
+        return;
+      }
 
-      es.onerror = () => {
-        clearTimeout(connectTimeout);
+      // 200 OK — parse the SSE stream manually chunk by chunk.
+      // SSE format: "data: <json>\n\n" per event.
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done || cancelled) {
+            if (cancelled) reader.cancel();
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split('\n\n');
+          buffer = chunks.pop(); // hold the last (possibly incomplete) chunk
+
+          for (const chunk of chunks) {
+            const line = chunk.trim();
+            if (line.startsWith('data: ')) {
+              handleEvent(JSON.parse(line.slice(6)));
+            }
+          }
+        }
+      } catch {
         if (cancelled) return;
-        es.close();
-
+        // Stream dropped mid-way — if stations are already visible, stop gracefully
         if (stationsRef.current.length > 0) {
-          // Already showing partial results — stop gracefully rather than
-          // restarting and potentially showing duplicate or stale stations.
           setIsStreaming(false);
           return;
         }
-
-        handleFailure();
-      };
+        scheduleRetry();
+      }
     }
 
-    function handleFailure() {
+    function handleEvent(data) {
+      if (cancelled) return;
+
+      if (data.type === 'meta') {
+        metaRef.current = {
+          query: data.query,
+          generatedAt: data.generatedAt,
+          totalStationsMatched: data.totalStationsMatched,
+        };
+        stationsRef.current = [];
+        attempt = 0;      // successfully connected — reset retry counter
+        setRetryCount(0);
+
+      } else if (data.type === 'station') {
+        // Sort departures within the card by scheduled time.
+        const sortedDepartures = [...data.departures].sort(
+          (a, b) => a.scheduledTimestamp - b.scheduledTimestamp
+        );
+
+        const updated = [
+          ...stationsRef.current,
+          {
+            stationId: data.stationId,
+            stationName: data.stationName,
+            departures: sortedDepartures,
+            fetchError: data.fetchError,
+          },
+        ];
+
+        // Sort cards: earliest departure first; empty/error stations (Infinity) sink to bottom.
+        updated.sort((a, b) => {
+          const aMin = a.departures.length > 0
+            ? Math.min(...a.departures.map((d) => d.scheduledTimestamp))
+            : Infinity;
+          const bMin = b.departures.length > 0
+            ? Math.min(...b.departures.map((d) => d.scheduledTimestamp))
+            : Infinity;
+          return aMin - bMin;
+        });
+
+        stationsRef.current = updated;
+        setIsLoading(false); // first station: drop full-page spinner
+        setResults({ ...metaRef.current, stations: stationsRef.current });
+
+      } else if (data.type === 'done') {
+        setIsStreaming(false);
+        setIsLoading(false);
+        // Edge case: query matched zero stations (totalStationsMatched === 0)
+        if (metaRef.current && stationsRef.current.length === 0) {
+          setResults({ ...metaRef.current, stations: [] });
+        }
+
+      } else if (data.type === 'error') {
+        setError(data.error);
+        setIsLoading(false);
+        setIsStreaming(false);
+      }
+    }
+
+    function scheduleRetry() {
       if (attempt < MAX_RETRIES) {
         attempt += 1;
         setRetryCount(attempt);
@@ -160,20 +221,17 @@ export function useSearchDepartures(query) {
       }
     }
 
-    const debounceTimer = setTimeout(() => {
-      if (!cancelled) connect();
-    }, DEBOUNCE_MS);
+    connect();
 
     return () => {
       cancelled = true;
-      clearTimeout(debounceTimer);
       clearTimeout(retryTimerRef.current);
-      if (esRef) esRef.close();
+      queryController.abort();
       setIsLoading(false);
       setIsStreaming(false);
       setRetryCount(0);
     };
-  }, [query]);
+  }, [submission]);
 
   return { results, isLoading, isStreaming, error, retryCount };
 }
