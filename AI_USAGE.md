@@ -201,6 +201,24 @@ Implemented the full retry strategy plus the frontend timeout. Key technical det
 
 ---
 
+---
+
+### Turn 10 — Backend refinements and iRail API best practices
+
+**User prompt:**
+> "Rename `CACHE_TTL_MS` to `STATIONS_CACHE_TTL_MS`. iRail also supports conditional GET requests — let's handle those to keep things fast. Set the user-agent header to `vishnu_dps/1.0 (chvishnu619@gmail.com)`. Do fuzzy search only if there is no substring match. A 15s cache for a live board might be too much — let's reduce it to 15s."
+
+**Claude's response (summary):**
+Before implementing, did an honest analysis of all changes. Fetched the iRail docs to verify the conditional GET spec and rate limit details. Implemented all five approved changes:
+
+1. **Rename `CACHE_TTL_MS` → `STATIONS_CACHE_TTL_MS`** — clarity alongside `LIVEBOARD_TTL_MS`.
+2. **Conditional GET for stations list** — stores the `ETag` from iRail responses; sends `If-None-Match` on subsequent refreshes via `validateStatus: (s) => s < 300 || s === 304`. A 304 response refreshes the TTL timestamp but keeps the existing cached data, saving ~100KB of bandwidth per 10-minute refresh cycle.
+3. **User-Agent header** — created a shared `irailClient = axios.create({ headers: { 'User-Agent': '...' } })` instance; all iRail calls use it. iRail docs explicitly warn they will block IPs without a user-agent if rate limits are hit.
+4. **Fuzzy only when no substring match** — added an early return in `searchStations()` before the Fuse.js block. Skips scoring all 714 stations when exact substring matches exist; fuzzy remains as a typo-tolerance fallback only.
+5. **Liveboard cache 30s → 15s** — halves the maximum staleness window for departure data.
+
+---
+
 ## Implementation Prompts / Approach
 
-No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach) were explained to the user using Android analogies before being implemented.
+No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach, iRail API best practices) were explained to the user before being implemented.

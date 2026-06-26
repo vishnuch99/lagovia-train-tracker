@@ -1,13 +1,23 @@
 const axios = require('axios');
 const Fuse = require('fuse.js');
 
-const IRAIL_BASE = 'https://api.irail.be';
-const CACHE_TTL_MS = 10 * 60 * 1000;      // 10 minutes — station list changes rarely
-const LIVEBOARD_TTL_MS = 30 * 1000;        // 30 seconds — live data, but don't hammer iRail
-const MAX_CONCURRENT_LIVEBOARDS = 5;       // cap parallel iRail calls per incoming request
+const STATIONS_CACHE_TTL_MS = 10 * 60 * 1000;  // 10 minutes — station list changes rarely
+const LIVEBOARD_TTL_MS = 15 * 1000;             // 15 seconds — fresh enough for a live board
+const MAX_CONCURRENT_LIVEBOARDS = 5;
+
+// Shared axios instance so the User-Agent is set once for every iRail call.
+// iRail docs: without a user-agent they will block the IP silently on rate limit
+// instead of contacting the developer first.
+const irailClient = axios.create({
+  baseURL: 'https://api.irail.be',
+  headers: {
+    'User-Agent': 'vishnu_dps/1.0 (chvishnu619@gmail.com)',
+  },
+});
 
 let stationsCache = null;
 let stationsCachedAt = 0;
+let stationsEtag = null; // stored ETag for conditional GET on subsequent refreshes
 
 // Per-station liveboard cache: stationAtId → { data, cachedAt }
 const liveboardCache = new Map();
@@ -37,25 +47,46 @@ function makeLimiter(max) {
 const liveboardLimiter = makeLimiter(MAX_CONCURRENT_LIVEBOARDS);
 
 /**
- * Fetches the full list of Belgian stations from iRail.
- * Results are cached in memory for CACHE_TTL_MS.
- * If the refresh fails but we have stale data, we serve it rather than throwing —
- * a transient iRail blip shouldn't kill all searches.
+ * Fetches the full list of Belgian stations from iRail, with two layers of caching:
+ *
+ * 1. In-memory TTL (10 min) — skips the network entirely on cache hit.
+ * 2. Conditional GET (ETag / If-None-Match) — on TTL expiry, sends the stored ETag
+ *    so iRail can return 304 Not Modified when nothing changed, saving all bandwidth.
+ *    A 304 refreshes the TTL timestamp but keeps the existing cached data.
+ *
+ * Falls back to stale cache data if the refresh request fails entirely.
  */
 async function getStations() {
   const now = Date.now();
-  if (stationsCache && now - stationsCachedAt < CACHE_TTL_MS) {
+  if (stationsCache && now - stationsCachedAt < STATIONS_CACHE_TTL_MS) {
     return stationsCache;
   }
 
+  const conditionalHeaders = stationsEtag ? { 'If-None-Match': stationsEtag } : {};
+
   try {
-    const response = await axios.get(`${IRAIL_BASE}/stations/`, {
+    const response = await irailClient.get('/stations/', {
       params: { format: 'json', lang: 'en' },
+      headers: conditionalHeaders,
       timeout: 8000,
+      // axios throws on any non-2xx by default — tell it 304 is also acceptable.
+      validateStatus: (status) => (status >= 200 && status < 300) || status === 304,
     });
+
+    if (response.status === 304) {
+      // iRail confirms nothing changed — refresh the TTL so we don't retry for
+      // another 10 minutes, but keep the data we already have.
+      stationsCachedAt = Date.now();
+      return stationsCache;
+    }
+
     stationsCache = response.data.station;
     stationsCachedAt = Date.now();
+    if (response.headers.etag) {
+      stationsEtag = response.headers.etag;
+    }
     return stationsCache;
+
   } catch (err) {
     if (stationsCache) {
       // Serve stale data rather than propagating the error upward.
@@ -68,10 +99,14 @@ async function getStations() {
 }
 
 /**
- * Returns stations matching the query by:
- *   1. Exact substring match on name or standardname (satisfies the core requirement)
- *   2. Fuzzy match via fuse.js for typo tolerance (bonus — e.g. "Antverpen" → "Antwerpen-Centraal")
- * Fuzzy results are appended after substring matches and deduplicated by id.
+ * Returns stations matching the query.
+ *
+ * Substring match runs first. If it finds anything, it's returned immediately —
+ * no fuzzy pass needed. Fuzzy (fuse.js) only runs as a fallback when substring
+ * returns zero results, catching typos like "Antverpen" → "Antwerpen-Centraal".
+ *
+ * Keeping them separate avoids scoring all 714 stations on every normal query
+ * and prevents fuzzy results from appearing alongside exact substring matches.
  */
 function searchStations(stations, query) {
   const lowerQuery = query.toLowerCase();
@@ -81,24 +116,21 @@ function searchStations(stations, query) {
       s.name.toLowerCase().includes(lowerQuery) ||
       (s.standardname && s.standardname.toLowerCase().includes(lowerQuery))
   );
-  const substringIds = new Set(substringMatches.map((s) => s.id));
 
+  if (substringMatches.length > 0) return substringMatches;
+
+  // No substring matches — run fuzzy as a typo-tolerance fallback only
   const fuse = new Fuse(stations, {
     keys: ['name', 'standardname'],
     threshold: 0.35,
     distance: 100,
     minMatchCharLength: 3,
   });
-  const fuzzyOnly = fuse
-    .search(query)
-    .map((r) => r.item)
-    .filter((s) => !substringIds.has(s.id));
-
-  return [...substringMatches, ...fuzzyOnly];
+  return fuse.search(query).map((r) => r.item);
 }
 
 /**
- * Fetches the live departure board for a single station, with a 30-second cache.
+ * Fetches the live departure board for a single station, with a 15-second cache.
  * Repeated searches for the same station within the window skip the iRail call entirely.
  * The limiter ensures at most MAX_CONCURRENT_LIVEBOARDS calls run in parallel.
  */
@@ -117,7 +149,7 @@ async function getLiveboard(stationAtId) {
       return rechecked.data;
     }
 
-    const response = await axios.get(`${IRAIL_BASE}/liveboard/`, {
+    const response = await irailClient.get('/liveboard/', {
       params: { id: stationAtId, format: 'json', lang: 'en', alerts: 'true' },
       timeout: 6000,
     });
