@@ -301,6 +301,29 @@ The fix was Server-Sent Events (SSE): the backend streams each station result as
 
 ---
 
+### Turn 13 — Retry logic restored for SSE
+
+**User prompt:**
+> "Why did you remove the retry logic?"
+
+**Claude's response (summary):**
+
+Acknowledged the mistake. "EventSource auto-reconnects" is not equivalent to the custom retry strategy — it retries immediately with no backoff and no limit, which could spam a struggling backend. The retry logic served real purposes that needed to be preserved.
+
+Re-implemented retry logic adapted for SSE in `useSearchDepartures.js`:
+
+- **Retry on**: `onerror` before any data arrives, or a 10s connection timeout (no `meta` event received). EventSource has no built-in timeout — a `setTimeout` clears at 10s and calls `handleFailure()` if `receivedMeta` is still false.
+- **Don't retry on**: mid-stream drop after partial results are already showing. In that case, just set `isStreaming=false` and let the user see what arrived. Restarting would duplicate stations or show stale data.
+- **Max retries**: 3 (4 total attempts), same as before
+- **Backoff**: 1s → 2s → 4s with ±200ms jitter, same as before
+- **`retryCount`**: restored to the hook return value and wired back into DepartureList to show "Retrying… (attempt N of 4)" in the loading state
+
+**What changed from before**: the retry now applies only to the initial connection phase (before `meta` arrives), not per-attempt HTTP timeouts. Once the stream is flowing, it's considered healthy; if it drops with data already shown, the partial results stay visible.
+
+**Files changed:** `frontend/src/hooks/useSearchDepartures.js`, `frontend/src/App.jsx`, `frontend/src/components/DepartureList.jsx`
+
+---
+
 ## Implementation Prompts / Approach
 
 No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach, iRail API best practices) were explained to the user before being implemented.

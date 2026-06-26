@@ -1,4 +1,5 @@
 import { AlertCircle, MapPin, Clock } from 'lucide-react';
+import { TOTAL_ATTEMPTS } from '../hooks/useSearchDepartures.js';
 
 function DelayBadge({ delayMinutes, cancelled }) {
   if (cancelled) {
@@ -98,13 +99,17 @@ function StationCard({ station }) {
  * Android analogy: a Fragment that observes a Flow — renders whatever has
  * arrived so far and shows a footer indicator while more items are coming.
  */
-export default function DepartureList({ results, error, query, isLoading, isStreaming }) {
+export default function DepartureList({ results, error, query, isLoading, isStreaming, retryCount }) {
   // Full-page spinner: waiting for the very first station to arrive
   if (isLoading && !results) {
     return (
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3 animate-pulse">🚂</div>
-        <p className="text-sm">Fetching departures…</p>
+        <p className="text-sm">
+          {retryCount > 0
+            ? `Retrying… (attempt ${retryCount + 1} of ${TOTAL_ATTEMPTS})`
+            : 'Fetching departures…'}
+        </p>
       </div>
     );
   }
