@@ -219,6 +219,88 @@ Before implementing, did an honest analysis of all changes. Fetched the iRail do
 
 ---
 
+### Turn 11 — Rate limiting strategy analysis and implementation
+
+**User prompt:**
+> "Let's talk about rate limiting now. API docs say 3 req/s and one burst of 5. So I think we should fire a max of 8 requests at first, then launch everything else at 2req/s and wait for 2 seconds to complete before firing the next batch of 8. The moment any of them returns 429, we fall back to 2req/s immediately and wait a second. My assumption is that the refill rate for bursts is 3req/s. Since the docs explicitly mention that refill happens only when we drop below 3, I chose 2. Is this a good strategy? Do you have something better? Be brutally honest. I would rather have a slow product than get banned."
+
+**Claude's response (summary):**
+
+Before implementing, fetched the iRail docs verbatim and gave an honest analysis:
+
+**What was correct in the proposal:**
+- Consuming the burst upfront — right call
+- Choosing 2 req/s instead of 3 — correct; docs say "drop *below* 3 to refill burst", so 3 exact never refills
+- Dropping rate on 429 — correct
+
+**What was wrong:**
+
+1. **"Batch of 8 every 2 seconds" math doesn't hold** — at 2 req/s, net refill is 3−2=1 token/second. After 2 seconds of 2 req/s, you have 2 burst tokens (not 5). To earn another batch of 8 requires ~5 seconds of pacing, not 2. Firing "8 every 2 seconds" would trigger 429 on the second batch.
+
+2. **The existing `makeLimiter` was not a rate limiter** — it was a concurrency limiter (at most N requests in-flight simultaneously). With 5 concurrent requests and ~400ms response times, the backend was dispatching ~12 requests/second — 4× the limit. No 429s occurred only because the 15s liveboard cache absorbed most repeat searches.
+
+3. **`getStations()` had zero rate protection** — it called iRail directly with no limiter at all.
+
+4. **Batch model requires fragile state** ("when did I earn another burst?"). A continuous token bucket computes this automatically from elapsed wall-clock time.
+
+**First-attempt bug (discovered during testing):** The initial implementation used a simple token bucket without a queue. Without a queue, all concurrent callers computed the same wait time and fired simultaneously after the timeout — a "thundering herd" that defeated the rate limit. A 16-station search completed in 1.8 seconds instead of ~6.5 seconds.
+
+**Fix:** Replaced with a queue-based token bucket. A FIFO queue of pending `acquire()` resolve functions is drained by a single `tick()` scheduler that runs one token at a time. Only one tick runs at a time (`scheduled` flag), so concurrent callers queue up and are released serially at 2/s after the burst.
+
+**Final implementation (`backend/src/services/irail.js`):**
+
+- `makeRateLimiter({ tokensPerSecond: 2, burst: 5 })` — queue-based token bucket replacing `makeLimiter`
+- `irailGet(path, options)` — single wrapper for all iRail HTTP calls; acquires a token before dispatching, handles 429 with `penalize(2000)` (forces ~2s global pause for all callers) then retries once
+- `getStations()` and `getLiveboard()` both call `irailGet` — rate limit shared across all iRail endpoints
+- `MAX_CONCURRENT_LIVEBOARDS` constant and the double-check-inside-limiter pattern removed
+
+**Observed timing after fix:**
+- Cold "Bru" search (16 stations, no cache): ~6.5 seconds (5 burst + 11 × 500ms)
+- Repeat "Bru" search within 15s cache window: 14ms (pure cache hit, 0 iRail calls)
+
+---
+
+### Turn 12 — Progressive rendering via Server-Sent Events
+
+**User prompt:**
+> "Is the UI not updated for every batch? Why am I not seeing the first burst immediately? It took more than 7s for me to fetch 'bru'. Why aren't the first 8 visible immediately?"
+
+**Claude's response (summary):**
+
+Identified the root cause: the backend used `Promise.allSettled` to collect ALL liveboard results before sending a single JSON response. Even with a rate limiter and fast burst, the browser received nothing until the very last liveboard completed (~6.5s for 16 stations).
+
+The fix was Server-Sent Events (SSE): the backend streams each station result as its liveboard resolves, so the first 5 stations (burst) appear in ~500ms, and more arrive every 500ms after that.
+
+**Backend change (`routes/departures.js`):**
+- Response headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`
+- Emit `meta` event first (query, generatedAt, totalStationsMatched)
+- `Promise.allSettled` is kept but each `.map()` callback now emits a `station` event immediately when its liveboard resolves, rather than collecting into an array
+- Emit `done` event when all liveboards are settled
+- `req.on('close', ...)` guard prevents writes to disconnected clients
+
+**Frontend change (`useSearchDepartures.js`):**
+- Replaced `fetch` + JSON parse with `EventSource`
+- Debounce still applies (350ms) — EventSource opens after the pause, preventing a new connection per keystroke
+- `stationsRef` accumulates station results without triggering re-renders; `setResults` is called on each new station, passing the current accumulated array
+- `isLoading`: true while waiting for the first station (full-page spinner); false once first station arrives
+- `isStreaming`: true while the SSE connection is open; false on `done` or error. Allows the UI to show "Loading more stations…" while results are partially rendered
+- `esCleanup` ref closes the EventSource on query-change cleanup
+
+**Frontend change (`DepartureList.jsx`):**
+- Removed `retryCount` prop; added `isStreaming` prop
+- Loading state: `isLoading && !results` shows full-page spinner; `results + isStreaming` shows partial results with "Loading more stations…" footer
+- Empty-results state only shown when `!isStreaming` (all stations have reported in)
+
+**Observed UX:**
+- First stations visible within ~500ms of the debounce (burst tokens)
+- Each subsequent station appears every ~500ms
+- "Loading more stations…" pulses at the bottom until `done` fires
+- Cached repeat searches: all stations appear simultaneously (instant)
+
+**Files changed:** `backend/src/routes/departures.js`, `frontend/src/hooks/useSearchDepartures.js`, `frontend/src/App.jsx`, `frontend/src/components/DepartureList.jsx`
+
+---
+
 ## Implementation Prompts / Approach
 
 No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach, iRail API best practices) were explained to the user before being implemented.

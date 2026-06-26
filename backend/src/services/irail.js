@@ -3,7 +3,6 @@ const Fuse = require('fuse.js');
 
 const STATIONS_CACHE_TTL_MS = 10 * 60 * 1000;  // 10 minutes — station list changes rarely
 const LIVEBOARD_TTL_MS = 15 * 1000;             // 15 seconds — fresh enough for a live board
-const MAX_CONCURRENT_LIVEBOARDS = 5;
 
 // Shared axios instance so the User-Agent is set once for every iRail call.
 // iRail docs: without a user-agent they will block the IP silently on rate limit
@@ -23,28 +22,98 @@ let stationsEtag = null; // stored ETag for conditional GET on subsequent refres
 const liveboardCache = new Map();
 
 /**
- * Simple concurrency limiter — equivalent to a Semaphore(N) in Java/Kotlin.
- * Keeps at most `max` promises running simultaneously; queues the rest.
- * Written inline to avoid an npm dependency for ~15 lines of code.
+ * Queue-based token bucket rate limiter — models iRail's server-side algorithm exactly.
+ *
+ * iRail allows 3 req/s sustained with a 5-token burst bucket that starts full.
+ * We use 2 req/s (below 3) so the burst refills at a net +1 token/second.
+ *
+ * Why a queue is necessary: without one, concurrent callers all compute the same
+ * wait time and fire simultaneously — defeating the purpose of the rate limit.
+ * The queue serializes releases so each caller is admitted one at a time, spaced
+ * by 1/tokensPerSecond ms after the burst is exhausted.
+ *
+ * On 429: penalize() pushes the next dispatch out by `ms` by draining tokens deeply
+ * negative — all queued callers back off together automatically.
+ *
+ * Android analogy: a shared bounded channel where the producer side releases
+ * one permit every (1/rate)s; consumers block until a permit is available.
  */
-function makeLimiter(max) {
-  let active = 0;
-  const queue = [];
-  const run = () => {
-    if (queue.length === 0 || active >= max) return;
-    active++;
-    const { fn, resolve, reject } = queue.shift();
-    fn()
-      .then(resolve, reject)
-      .finally(() => { active--; run(); });
-  };
-  return (fn) => new Promise((resolve, reject) => {
-    queue.push({ fn, resolve, reject });
-    run();
-  });
+function makeRateLimiter({ tokensPerSecond, burst }) {
+  let tokens = burst; // start full — first `burst` requests are dispatched immediately
+  let lastRefill = Date.now();
+  const queue = [];   // FIFO queue of resolve functions from pending acquire() calls
+  let scheduled = false;
+
+  function refill() {
+    const now = Date.now();
+    const elapsed = (now - lastRefill) / 1000;
+    tokens = Math.min(burst, tokens + elapsed * tokensPerSecond);
+    lastRefill = now;
+  }
+
+  // Drains the queue: releases one token per head-of-queue waiter, then schedules
+  // itself for the next token if waiters remain. Only one tick runs at a time.
+  function tick() {
+    scheduled = false;
+    if (queue.length === 0) return;
+    refill();
+    while (tokens >= 1 && queue.length > 0) {
+      tokens -= 1;
+      queue.shift()(); // resolve the oldest waiter
+    }
+    if (queue.length > 0) {
+      const waitMs = Math.ceil(((1 - tokens) / tokensPerSecond) * 1000);
+      scheduled = true;
+      setTimeout(tick, waitMs);
+    }
+  }
+
+  async function acquire() {
+    return new Promise((resolve) => {
+      queue.push(resolve);
+      if (!scheduled) tick(); // start draining only if no tick is already pending
+    });
+  }
+
+  // Sets tokens such that the next dispatch is delayed by ~ms milliseconds.
+  // Formula: time until tokens=1 is (1 - tokens) / rate = ms/1000
+  //          → tokens = 1 - rate * ms/1000
+  function penalize(ms) {
+    tokens = 1 - tokensPerSecond * (ms / 1000);
+    lastRefill = Date.now();
+    // If a tick is already scheduled it will re-evaluate via refill() when it fires.
+    // If no tick is running but callers are waiting, schedule one now.
+    if (!scheduled && queue.length > 0) {
+      const waitMs = Math.ceil(((1 - tokens) / tokensPerSecond) * 1000);
+      scheduled = true;
+      setTimeout(tick, waitMs);
+    }
+  }
+
+  return { acquire, penalize };
 }
 
-const liveboardLimiter = makeLimiter(MAX_CONCURRENT_LIVEBOARDS);
+const irailLimiter = makeRateLimiter({ tokensPerSecond: 2, burst: 5 });
+
+/**
+ * Single entry point for every outbound iRail HTTP call.
+ * Acquires a rate-limit token before dispatching, and handles 429 globally:
+ * drains the shared bucket (backpressure for all callers) then retries once.
+ */
+async function irailGet(path, options = {}) {
+  await irailLimiter.acquire();
+  try {
+    return await irailClient.get(path, options);
+  } catch (err) {
+    if (err.response?.status === 429) {
+      console.warn('[irail] 429 received — applying 2s backoff to all pending requests');
+      irailLimiter.penalize(2000);
+      await irailLimiter.acquire(); // naturally waits ~2s due to the penalty before retrying
+      return irailClient.get(path, options);
+    }
+    throw err;
+  }
+}
 
 /**
  * Fetches the full list of Belgian stations from iRail, with two layers of caching:
@@ -65,7 +134,7 @@ async function getStations() {
   const conditionalHeaders = stationsEtag ? { 'If-None-Match': stationsEtag } : {};
 
   try {
-    const response = await irailClient.get('/stations/', {
+    const response = await irailGet('/stations/', {
       params: { format: 'json', lang: 'en' },
       headers: conditionalHeaders,
       timeout: 8000,
@@ -132,7 +201,7 @@ function searchStations(stations, query) {
 /**
  * Fetches the live departure board for a single station, with a 15-second cache.
  * Repeated searches for the same station within the window skip the iRail call entirely.
- * The limiter ensures at most MAX_CONCURRENT_LIVEBOARDS calls run in parallel.
+ * All calls go through irailLimiter (via irailGet) — no separate concurrency limiter needed.
  */
 async function getLiveboard(stationAtId) {
   const now = Date.now();
@@ -141,21 +210,12 @@ async function getLiveboard(stationAtId) {
     return cached.data;
   }
 
-  return liveboardLimiter(async () => {
-    // Re-check cache inside the limiter — another concurrent call for the same
-    // station may have populated it while this one was queued.
-    const rechecked = liveboardCache.get(stationAtId);
-    if (rechecked && Date.now() - rechecked.cachedAt < LIVEBOARD_TTL_MS) {
-      return rechecked.data;
-    }
-
-    const response = await irailClient.get('/liveboard/', {
-      params: { id: stationAtId, format: 'json', lang: 'en', alerts: 'true' },
-      timeout: 6000,
-    });
-    liveboardCache.set(stationAtId, { data: response.data, cachedAt: Date.now() });
-    return response.data;
+  const response = await irailGet('/liveboard/', {
+    params: { id: stationAtId, format: 'json', lang: 'en', alerts: 'true' },
+    timeout: 6000,
   });
+  liveboardCache.set(stationAtId, { data: response.data, cachedAt: Date.now() });
+  return response.data;
 }
 
 /**

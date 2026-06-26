@@ -1,11 +1,5 @@
 import { AlertCircle, MapPin, Clock } from 'lucide-react';
-import { TOTAL_ATTEMPTS } from '../hooks/useSearchDepartures.js';
 
-/**
- * DelayBadge — small colored pill showing on-time / delayed / cancelled status.
- * Android analogy: a TextView with a drawable background set programmatically
- * based on the delay value.
- */
 function DelayBadge({ delayMinutes, cancelled }) {
   if (cancelled) {
     return (
@@ -28,16 +22,11 @@ function DelayBadge({ delayMinutes, cancelled }) {
   );
 }
 
-/**
- * StationCard — one card per station showing its upcoming departures in a table.
- * Android analogy: a RecyclerView section header followed by its items.
- */
 function StationCard({ station }) {
   const hasPlatform = station.departures.some((d) => d.platform);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-4 overflow-hidden">
-      {/* Station header */}
       <div className="px-4 py-3 bg-slate-50 border-b border-gray-100 flex items-center gap-2">
         <MapPin size={15} className="text-slate-500 shrink-0" />
         <h2 className="font-semibold text-slate-800">{station.stationName}</h2>
@@ -46,7 +35,6 @@ function StationCard({ station }) {
         </span>
       </div>
 
-      {/* Fetch error for this specific station */}
       {station.fetchError && (
         <div className="px-4 py-3 text-sm text-red-600 flex items-center gap-2">
           <AlertCircle size={15} className="shrink-0" />
@@ -54,7 +42,6 @@ function StationCard({ station }) {
         </div>
       )}
 
-      {/* Departures table */}
       {station.departures.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -76,19 +63,14 @@ function StationCard({ station }) {
                   <td className="px-4 py-3 font-mono font-semibold text-blue-600 whitespace-nowrap">
                     {dep.trainNumber}
                   </td>
-                  <td
-                    className={`px-4 py-3 text-gray-700 ${dep.cancelled ? 'line-through text-gray-400' : ''}`}
-                  >
+                  <td className={`px-4 py-3 text-gray-700 ${dep.cancelled ? 'line-through text-gray-400' : ''}`}>
                     {dep.destination}
                   </td>
                   <td className="px-4 py-3 text-gray-700 tabular-nums whitespace-nowrap">
                     {dep.scheduledTime}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
-                    <DelayBadge
-                      delayMinutes={dep.delayMinutes}
-                      cancelled={dep.cancelled}
-                    />
+                    <DelayBadge delayMinutes={dep.delayMinutes} cancelled={dep.cancelled} />
                   </td>
                   {hasPlatform && (
                     <td className="px-4 py-3 text-gray-500">{dep.platform ?? '—'}</td>
@@ -105,20 +87,24 @@ function StationCard({ station }) {
 
 /**
  * DepartureList — renders the full results area below the search bar.
- * Handles all four states: idle, loading, error, and results (including empty results).
- * Android analogy: a Fragment that observes ViewModel state and switches between
- * different layouts (shimmer, error view, empty view, RecyclerView).
+ *
+ * States:
+ *   isLoading && !results  → full-page spinner (waiting for first station)
+ *   results + isStreaming  → partial results visible, more arriving (indicator at bottom)
+ *   results + !isStreaming → complete results
+ *   error                 → error banner
+ *   idle                  → search prompt
+ *
+ * Android analogy: a Fragment that observes a Flow — renders whatever has
+ * arrived so far and shows a footer indicator while more items are coming.
  */
-export default function DepartureList({ results, error, query, isLoading, retryCount }) {
-  if (isLoading) {
+export default function DepartureList({ results, error, query, isLoading, isStreaming }) {
+  // Full-page spinner: waiting for the very first station to arrive
+  if (isLoading && !results) {
     return (
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3 animate-pulse">🚂</div>
-        <p className="text-sm">
-          {retryCount > 0
-            ? `Retrying… (attempt ${retryCount + 1} of ${TOTAL_ATTEMPTS})`
-            : 'Fetching departures…'}
-        </p>
+        <p className="text-sm">Fetching departures…</p>
       </div>
     );
   }
@@ -142,7 +128,8 @@ export default function DepartureList({ results, error, query, isLoading, retryC
     );
   }
 
-  if (results.stations.length === 0) {
+  // Results arrived but all stations had no departures (and streaming is done)
+  if (results.stations.length === 0 && !isStreaming) {
     const noStations = results.totalStationsMatched === 0;
     return (
       <div className="text-center py-16 text-gray-400">
@@ -161,10 +148,7 @@ export default function DepartureList({ results, error, query, isLoading, retryC
     );
   }
 
-  const totalDepartures = results.stations.reduce(
-    (sum, s) => sum + s.departures.length,
-    0
-  );
+  const totalDepartures = results.stations.reduce((sum, s) => sum + s.departures.length, 0);
 
   return (
     <div>
@@ -185,6 +169,13 @@ export default function DepartureList({ results, error, query, isLoading, retryC
       {results.stations.map((station) => (
         <StationCard key={station.stationId} station={station} />
       ))}
+
+      {/* Shown while more station results are still streaming in */}
+      {isStreaming && (
+        <div className="text-center py-4 text-sm text-gray-400 animate-pulse">
+          Loading more stations…
+        </div>
+      )}
     </div>
   );
 }

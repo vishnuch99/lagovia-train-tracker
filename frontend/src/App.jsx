@@ -14,7 +14,7 @@ import { useSearchDepartures } from './hooks/useSearchDepartures.js';
  */
 export default function App() {
   const [query, setQuery] = useState('');
-  const { results, isLoading, error, retryCount } = useSearchDepartures(query);
+  const { results, isLoading, isStreaming, error } = useSearchDepartures(query);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -37,7 +37,7 @@ export default function App() {
           error={error}
           query={query}
           isLoading={isLoading}
-          retryCount={retryCount}
+          isStreaming={isStreaming}
         />
       </main>
     </div>
