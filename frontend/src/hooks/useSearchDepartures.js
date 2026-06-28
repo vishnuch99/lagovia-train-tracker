@@ -145,6 +145,14 @@ export function useSearchDepartures(submission) {
           return;
         }
         scheduleRetry();
+        return; // stay in loading/streaming while retry is pending
+      }
+
+      // Stream ended cleanly (done=true) without a SSE 'done' event.
+      // This covers mid-stream drops that close the connection without error.
+      if (!cancelled) {
+        setIsStreaming(false);
+        setIsLoading(false);
       }
     }
 
@@ -163,7 +171,7 @@ export function useSearchDepartures(submission) {
 
       } else if (data.type === 'station') {
         // Sort departures within the card by scheduled time.
-        const sortedDepartures = [...data.departures].sort(
+        const sortedDepartures = [...(data.departures ?? [])].sort(
           (a, b) => a.scheduledTimestamp - b.scheduledTimestamp
         );
 

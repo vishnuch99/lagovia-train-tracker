@@ -267,4 +267,4 @@ function formatDeparture(dep) {
   };
 }
 
-module.exports = { getStations, searchStations, getLiveboard, filterDepartures, formatDeparture };
+module.exports = { getStations, searchStations, getLiveboard, filterDepartures, formatDeparture, makeRateLimiter };

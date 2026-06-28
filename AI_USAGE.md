@@ -411,6 +411,28 @@ Sorting happens in the frontend hook's `station` event handler — the backend c
 
 ---
 
+### Turn 16 — Comprehensive test suite
+
+**User prompt:**
+> "I want to write unit tests. I have a few usecases in mind: 1. Frontend only. Search should hit backend API. verify that it hits. 2. When backend does not respond in 10s, frontend should throw an error. 3. Show error when backend cannot be reached entirely. No internet on client. 4. Backend returns some wrong response that is not as intended. Frontend should catch all errors and display a generic error message. Never crash. Add anything else you think can help. Tell me all the usecases, how you plan to write them and how to run them. Wait for my approval before you touch code."
+
+*Follow-up after first approval:*
+> "okay you also added functional testing into this. cool, np. lets keep going. 15. Backend fetches from cache as expected. … 16. Verify that rate limiting is working … 17. Stations with departures should appear above the ones that do not … 18. Status appears as expected … Rewrite the plan now."
+
+*Final go-ahead:*
+> "Done. Lets go. Do not write the entire thing in AI Usage. Just mention the broad categories and the test counts."
+
+**Claude's response (summary):**
+Implemented 48 tests across 5 test files using Vitest + React Testing Library:
+
+- **Frontend hook tests (20)** — `useSearchDepartures.test.js`: fetch URL encoding, connect timeout, network retry with exponential backoff, malformed/unknown SSE events, HTTP 400 error surfacing, happy-path streaming, station sort order, mid-stream graceful degradation, stale request cancellation, idle/clear reset.
+- **Frontend component/integration tests (11)** — `DepartureList.test.jsx` (7): all render states (loading, retry, error, idle, streaming footer, empty results). `StatusBadge.test.jsx` (4): On Time / Delayed / Cancelled logic. `App.test.jsx` (2): 400 renders error text; clear button lifecycle.
+- **Backend service tests (15)** — `irail.test.mjs`: `searchStations` displayName logic (5), `filterDepartures` window + left-flag (2), `formatDeparture` output shape (3), `makeRateLimiter` timing with fake timers — burst exhaustion, per-call spacing, penalize (5).
+
+Key technical challenges: jsdom incompatibility with `ReadableStream` (solved with duck-typed mock objects); fake-timer + `waitFor` deadlock (solved by restoring real timers before waiting); CJS/ESM conflict in backend test files (solved with `.mjs` extension + `createRequire`); re-render cascade causing effect re-fires (solved by capturing `submission` outside the `renderHook` callback).
+
+---
+
 ## Implementation Prompts / Approach
 
 No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach, iRail API best practices) were explained to the user before being implemented.
