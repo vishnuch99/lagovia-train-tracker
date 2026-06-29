@@ -108,16 +108,6 @@ function StationCard({ station, sortDir, onToggleSort }) {
   );
 }
 
-/**
- * DepartureList — renders the full results area.
- *
- * States:
- *   isLoading && !results  → full-page spinner (waiting for first station)
- *   results + isStreaming  → partial results + "Loading more…" footer
- *   results                → complete results
- *   error                  → error banner (includes backend validation messages)
- *   idle (!results, !error, !isLoading) → search prompt
- */
 export default function DepartureList({ results, error, isLoading }) {
   const [sortDir, setSortDir] = useState('asc');
 

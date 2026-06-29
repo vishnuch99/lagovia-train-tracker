@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 
 // CJS source must be imported via createRequire from an ESM test file
 const require = createRequire(import.meta.url);
-const { searchStations, filterDepartures, formatDeparture, makeRateLimiter } = require('./irail.js');
+const { searchStations, filterDepartures, formatDeparture } = require('./irail.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -123,64 +123,3 @@ describe('formatDeparture', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// B14–B18  Rate limiter
-// ---------------------------------------------------------------------------
-
-describe('makeRateLimiter', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
-
-  async function resolveAll(limiter, count) {
-    const timestamps = [];
-    const start = Date.now();
-    const promises = Array.from({ length: count }, async () => {
-      await limiter.acquire();
-      timestamps.push(Date.now() - start);
-    });
-    await vi.runAllTimersAsync();
-    await Promise.all(promises);
-    return timestamps;
-  }
-
-  it('B14 — first 5 calls resolve immediately (burst)', async () => {
-    const limiter = makeRateLimiter({ tokensPerSecond: 2, burst: 5 });
-    const timestamps = await resolveAll(limiter, 5);
-    for (const t of timestamps) expect(t).toBe(0);
-  });
-
-  it('B15 — 6th call resolves ≥500ms after burst is exhausted', async () => {
-    const limiter = makeRateLimiter({ tokensPerSecond: 2, burst: 5 });
-    const timestamps = await resolveAll(limiter, 6);
-    for (let i = 0; i < 5; i++) expect(timestamps[i]).toBe(0);
-    expect(timestamps[5]).toBeGreaterThanOrEqual(500);
-  });
-
-  it('B16 — 8 calls: first 5 immediate, then one every ~500ms', async () => {
-    const limiter = makeRateLimiter({ tokensPerSecond: 2, burst: 5 });
-    const timestamps = await resolveAll(limiter, 8);
-    for (let i = 0; i < 5; i++) expect(timestamps[i]).toBe(0);
-    expect(timestamps[5]).toBeGreaterThanOrEqual(500);
-    expect(timestamps[6]).toBeGreaterThanOrEqual(1000);
-    expect(timestamps[7]).toBeGreaterThanOrEqual(1500);
-  });
-
-  it('B17 — 15 calls: first 5 immediate, remainder at 500ms intervals', async () => {
-    const limiter = makeRateLimiter({ tokensPerSecond: 2, burst: 5 });
-    const timestamps = await resolveAll(limiter, 15);
-    for (let i = 0; i < 5; i++) expect(timestamps[i]).toBe(0);
-    for (let i = 5; i < 15; i++) {
-      expect(timestamps[i]).toBeGreaterThanOrEqual((i - 4) * 500);
-    }
-  });
-
-  it('B18 — penalize(2000) delays next acquire by ≥2000ms', async () => {
-    const limiter = makeRateLimiter({ tokensPerSecond: 2, burst: 5 });
-    await resolveAll(limiter, 5); // exhaust burst
-    limiter.penalize(2000);
-    const start = Date.now();
-    const p = limiter.acquire().then(() => Date.now() - start);
-    await vi.runAllTimersAsync();
-    expect(await p).toBeGreaterThanOrEqual(2000);
-  });
-});

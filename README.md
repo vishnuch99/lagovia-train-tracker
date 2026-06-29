@@ -56,7 +56,6 @@ Returns upcoming departures (next 15 minutes) from every station whose name cont
 {
   "query": "Bru",
   "generatedAt": "2024-01-15T14:32:00.000Z",
-  "totalStationsMatched": 3,
   "stations": [
     {
       "stationId": "BE.NMBS.008814001",
@@ -79,7 +78,7 @@ Returns upcoming departures (next 15 minutes) from every station whose name cont
 
 **Error responses:**
 ```json
-{ "error": "Query must be at least 3 characters", "code": "QUERY_TOO_SHORT" }
+{ "error": "Input is incomplete", "code": "QUERY_TOO_SHORT" }
 { "error": "Failed to reach the iRail upstream API", "code": "UPSTREAM_ERROR" }
 ```
 
@@ -97,9 +96,9 @@ The app is split into a Node.js/Express backend and a React frontend. The backen
 
 The full station list (~600 entries) is fetched from iRail once and cached in memory for 10 minutes. The list changes very rarely (new stations are opened every few years), so a 10-minute TTL is a reasonable trade-off between freshness and unnecessary API calls. A production system would use Redis; for this scope, a module-level variable is sufficient.
 
-### Parallel liveboard fetches with `Promise.allSettled`
+### Parallel liveboard fetches with `Promise.all`
 
-Searching "Bru" can match 5–10 stations. Rather than fetching them sequentially, we launch all liveboard requests concurrently with `Promise.allSettled`. Unlike `Promise.all`, `allSettled` continues even if one station's request fails — the UI shows an error note for that station while still displaying results for all others.
+Searching "Bru" can match 5–10 stations. Rather than fetching them sequentially, we launch all liveboard requests concurrently with `Promise.all`. Each per-station fetch is wrapped in its own `try/catch`, so a single station failure never rejects the outer `Promise.all` — the UI shows a per-station error note while still displaying results for all other stations.
 
 ### Fuzzy search
 
@@ -121,6 +120,6 @@ Tailwind CSS v3 is used directly rather than adding the full shadcn/ui tooling l
 
 - **No refresh button:** Results are fetched once when the query reaches 3 characters. If the user wants updated data they must clear and retype. A refresh-on-interval approach would require careful cleanup to avoid stale closures.
 - **No pagination:** If a search matches 30 stations, all are fetched and shown. In practice this is rare, but a busy query could generate many parallel iRail calls.
-- **No rate-limit handling:** iRail does not publish rate limits. If they exist and are hit, the backend returns a 502 UPSTREAM_ERROR.
+- **No rate-limit handling:** iRail documents rate limits (3 req/s, burst of 5) but does not enforce them in practice. The backend makes all liveboard requests concurrently with no throttling. If limits were enforced, the backend would return a 502 UPSTREAM_ERROR.
 - **Station cache is per-process:** Multiple backend instances would each maintain their own cache. A shared cache (Redis) would be needed for horizontal scaling.
 - **Time zone assumption:** Scheduled times are formatted in `Europe/Brussels`. If iRail ever returns timestamps in a different zone, this would show incorrect times.
