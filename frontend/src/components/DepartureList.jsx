@@ -1,4 +1,5 @@
-import { AlertCircle, MapPin, Clock } from 'lucide-react';
+import { useState } from 'react';
+import { AlertCircle, MapPin, Clock, ChevronUp, ChevronDown } from 'lucide-react';
 import { TOTAL_ATTEMPTS } from '../hooks/useSearchDepartures.js';
 
 function StatusBadge({ delayMinutes, cancelled }) {
@@ -23,11 +24,17 @@ function StatusBadge({ delayMinutes, cancelled }) {
   );
 }
 
-function StationCard({ station }) {
+function StationCard({ station, sortDir, onToggleSort }) {
+  const departures = [...station.departures].sort((a, b) =>
+    sortDir === 'asc'
+      ? a.scheduledTimestamp - b.scheduledTimestamp
+      : b.scheduledTimestamp - a.scheduledTimestamp
+  );
+
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-4 overflow-hidden">
-      {/* Station header */}
-      <div className="px-4 py-3 bg-slate-50 border-b border-gray-100 flex items-center gap-2">
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-4">
+      {/* Station header — sticky within the scrollable card list */}
+      <div className="sticky top-0 z-10 px-4 py-3 bg-slate-50 border-b border-gray-100 flex items-center gap-2 rounded-t-xl">
         <MapPin size={15} className="text-slate-500 shrink-0" />
         <h2 className="font-semibold text-slate-800">{station.stationName}</h2>
         <span className="ml-auto text-xs text-slate-500 shrink-0">
@@ -44,27 +51,35 @@ function StationCard({ station }) {
       )}
 
       {/* No departures in window */}
-      {station.departures.length === 0 && !station.fetchError && (
+      {departures.length === 0 && !station.fetchError && (
         <div className="px-4 py-6 text-center text-sm text-gray-400">
           No departures in the next 15 minutes
         </div>
       )}
 
       {/* Departures table */}
-      {station.departures.length > 0 && (
+      {departures.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-medium text-gray-400 uppercase tracking-wide border-b border-gray-50">
                 <th className="px-4 py-2">Train</th>
                 <th className="px-4 py-2">Destination</th>
-                <th className="px-4 py-2">Scheduled</th>
+                <th
+                  onClick={onToggleSort}
+                  className="px-4 py-2 cursor-pointer select-none hover:text-gray-600 transition-colors"
+                >
+                  <span className="flex items-center gap-1">
+                    Scheduled
+                    {sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  </span>
+                </th>
                 <th className="px-4 py-2">Delay</th>
                 <th className="px-4 py-2">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {station.departures.map((dep) => (
+              {departures.map((dep) => (
                 <tr
                   key={`${dep.trainNumber}-${dep.scheduledTimestamp}`}
                   className="hover:bg-gray-50 transition-colors"
@@ -105,6 +120,12 @@ function StationCard({ station }) {
  *   idle (!results, !error, !isLoading) → search prompt
  */
 export default function DepartureList({ results, error, isLoading, isStreaming, retryCount }) {
+  const [sortDir, setSortDir] = useState('asc');
+
+  function toggleSort() {
+    setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+  }
+
   if (isLoading && !results) {
     return (
       <div className="text-center py-16 text-gray-400">
@@ -170,15 +191,22 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
         </span>
       </div>
 
-      {results.stations.map((station) => (
-        <StationCard key={station.stationId} station={station} />
-      ))}
+      <div className="max-h-[65vh] overflow-y-auto">
+        {results.stations.map((station) => (
+          <StationCard
+            key={station.stationId}
+            station={station}
+            sortDir={sortDir}
+            onToggleSort={toggleSort}
+          />
+        ))}
 
-      {isStreaming && (
-        <div className="text-center py-4 text-sm text-gray-400 animate-pulse">
-          Loading more stations…
-        </div>
-      )}
+        {isStreaming && (
+          <div className="text-center py-4 text-sm text-gray-400 animate-pulse">
+            Loading more stations…
+          </div>
+        )}
+      </div>
     </div>
   );
 }
