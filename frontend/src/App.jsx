@@ -19,7 +19,7 @@ export default function App() {
   const [inputValue, setInputValue] = useState('');
   const [submission, setSubmission] = useState(null);
 
-  const { results, isLoading, isStreaming, error, retryCount } = useSearchDepartures(submission);
+  const { results, isLoading, error } = useSearchDepartures(submission);
 
   function handleSubmit() {
     setSubmission({ query: inputValue, id: Date.now() });
@@ -56,8 +56,6 @@ export default function App() {
           results={results}
           error={error}
           isLoading={isLoading}
-          isStreaming={isStreaming}
-          retryCount={retryCount}
         />
       </main>
     </div>

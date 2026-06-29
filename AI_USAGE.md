@@ -433,6 +433,56 @@ Key technical challenges: jsdom incompatibility with `ReadableStream` (solved wi
 
 ---
 
+### Turn 17 — Drop SSE, switch to simple concurrent JSON API
+
+**User prompt:**
+> "I just tested the API with 100 requests in less than a second. There are no 429s. Let's drop SSE and switch back to a simple API. 1. Fire every request at once. All concurrently. 2. Parse everything into a single JSON and return it. No more complicated rate limiting. Delete all of that code. Keep it simple. Receive a string, find the substrings, fuzzy match if there are no direct substrings, fetch everything at once, parcel into a json and return it. The API should return just one complete JSON. Nothing else. Also plan the frontend changes to accommodate this response. Do not touch the tests for now. Let them fail. We will rewrite it next."
+
+**Claude's response (summary):**
+The entire SSE + rate-limiting architecture was removed. Five files were rewritten or simplified:
+
+**`backend/src/services/irail.js`:**
+- Deleted `makeRateLimiter` (~55 lines), `irailLimiter`, and `irailGet`.
+- `getStations()` and `getLiveboard()` now call `irailClient.get()` directly.
+- `searchStations()` restored from commented-out state (it had been replaced with `return stations;` to test "match all stations").
+- `makeRateLimiter` removed from `module.exports`.
+
+**`backend/src/routes/departures.js`:**
+- Dropped all SSE: no `text/event-stream` headers, no `send()`, no `req.on('close')` guard, no streaming `Promise.allSettled` loop.
+- New handler: validates query, calls `getStations()`, runs `Promise.allSettled` → replaced with `Promise.all` (safe because every inner promise has its own `try/catch`), returns one `res.json({ query, generatedAt, stations })`.
+- Response shape: `{ query, generatedAt: ISO string, stations: [{ stationId, stationName, departures[], fetchError? }] }`.
+
+**`frontend/src/hooks/useSearchDepartures.js`:**
+- Gutted from ~240 lines to ~40. No EventSource, no reader loop, no retry, no refs, no streaming state.
+- Plain `fetch` → `.json()` → `setResults`. `AbortController` still cancels in-flight requests when the query changes.
+- Returns `{ results, isLoading, error }`.
+
+**`frontend/src/App.jsx`:**
+- Removed `isStreaming` and `retryCount` from hook destructuring and `DepartureList` props.
+
+**`frontend/src/components/DepartureList.jsx`:**
+- Removed `TOTAL_ATTEMPTS` import, `retryCount` prop, retry message branch, `isStreaming` prop, and "Loading more stations…" footer.
+- Loading state simplified to `'Fetching departures…'`.
+- Sticky headers and sort toggle unaffected.
+
+Tests were intentionally left failing per user instruction ("We will rewrite it next").
+
+**Files changed:** `backend/src/services/irail.js`, `backend/src/routes/departures.js`, `frontend/src/hooks/useSearchDepartures.js`, `frontend/src/App.jsx`, `frontend/src/components/DepartureList.jsx`
+
+---
+
+### Turn 18 — Sort station cards by earliest departure
+
+**User prompt:**
+> "The sorting of the cards themselves is gone. The cards themselves have to be sorted according to their earliest departures. Each card then should be sorted according to departures from earliest to last."
+
+**Claude's response (summary):**
+Added a `sortedStations` array in `DepartureList` that sorts `results.stations` by each station's minimum `scheduledTimestamp` before rendering. Stations with no departures use `Infinity` as the sort key, so they fall to the bottom. Within each card, departures remain sorted by the existing `sortDir` toggle (ascending by default = earliest to latest). The sort runs in the render function — no state change needed.
+
+**Files changed:** `frontend/src/components/DepartureList.jsx`
+
+---
+
 ## Implementation Prompts / Approach
 
 No pre-written prompt templates were used. Claude Code operated from the live conversation context, reading the PDF directly, asking clarifying questions, planning, then implementing file-by-file. All architectural decisions (caching strategy, `Promise.allSettled` vs `Promise.all`, filtering on scheduled vs actual time, retry policy, timeout approach, iRail API best practices) were explained to the user before being implemented.

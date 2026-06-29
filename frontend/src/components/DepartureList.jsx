@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { AlertCircle, MapPin, Clock, ChevronUp, ChevronDown } from 'lucide-react';
-import { TOTAL_ATTEMPTS } from '../hooks/useSearchDepartures.js';
 
 function StatusBadge({ delayMinutes, cancelled }) {
   if (cancelled) {
@@ -119,7 +118,7 @@ function StationCard({ station, sortDir, onToggleSort }) {
  *   error                  → error banner (includes backend validation messages)
  *   idle (!results, !error, !isLoading) → search prompt
  */
-export default function DepartureList({ results, error, isLoading, isStreaming, retryCount }) {
+export default function DepartureList({ results, error, isLoading }) {
   const [sortDir, setSortDir] = useState('asc');
 
   function toggleSort() {
@@ -130,11 +129,7 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
     return (
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3 animate-pulse">🚂</div>
-        <p className="text-sm">
-          {retryCount > 0
-            ? `Retrying… (attempt ${retryCount + 1} of ${TOTAL_ATTEMPTS})`
-            : 'Fetching departures…'}
-        </p>
+        <p className="text-sm">Fetching departures…</p>
       </div>
     );
   }
@@ -159,7 +154,7 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
   }
 
   // No station matched the query at all
-  if (results.stations.length === 0 && !isStreaming) {
+  if (results.stations.length === 0) {
     return (
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3">🚉</div>
@@ -174,6 +169,12 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
   }
 
   const totalDepartures = results.stations.reduce((sum, s) => sum + s.departures.length, 0);
+
+  const sortedStations = [...results.stations].sort((a, b) => {
+    const aMin = a.departures.length > 0 ? Math.min(...a.departures.map((d) => d.scheduledTimestamp)) : Infinity;
+    const bMin = b.departures.length > 0 ? Math.min(...b.departures.map((d) => d.scheduledTimestamp)) : Infinity;
+    return aMin - bMin;
+  });
 
   return (
     <div>
@@ -192,7 +193,7 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
       </div>
 
       <div className="max-h-[65vh] overflow-y-auto">
-        {results.stations.map((station) => (
+        {sortedStations.map((station) => (
           <StationCard
             key={station.stationId}
             station={station}
@@ -201,11 +202,6 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
           />
         ))}
 
-        {isStreaming && (
-          <div className="text-center py-4 text-sm text-gray-400 animate-pulse">
-            Loading more stations…
-          </div>
-        )}
       </div>
     </div>
   );
