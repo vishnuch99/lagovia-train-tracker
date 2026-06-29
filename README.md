@@ -79,6 +79,7 @@ Returns upcoming departures (next 15 minutes) from every station whose name cont
 **Error responses:**
 ```json
 { "error": "Input is incomplete", "code": "QUERY_TOO_SHORT" }
+{ "error": "Query is too long", "code": "QUERY_TOO_LONG" }
 { "error": "Failed to reach the iRail upstream API", "code": "UPSTREAM_ERROR" }
 ```
 
@@ -118,7 +119,6 @@ Tailwind CSS v3 is used directly rather than adding the full shadcn/ui tooling l
 
 ### Known Limitations
 
-- **No refresh button:** Results are fetched once when the query reaches 3 characters. If the user wants updated data they must clear and retype. A refresh-on-interval approach would require careful cleanup to avoid stale closures.
 - **No pagination:** If a search matches 30 stations, all are fetched and shown. In practice this is rare, but a busy query could generate many parallel iRail calls.
 - **No rate-limit handling:** iRail documents rate limits (3 req/s, burst of 5) but does not enforce them in practice. The backend makes all liveboard requests concurrently with no throttling. If limits were enforced, the backend would return a 502 UPSTREAM_ERROR.
 - **Station cache is per-process:** Multiple backend instances would each maintain their own cache. A shared cache (Redis) would be needed for horizontal scaling.

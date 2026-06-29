@@ -1,8 +1,8 @@
 const axios = require('axios');
 const Fuse = require('fuse.js');
 
-const STATIONS_CACHE_TTL_MS = 10 * 60 * 1000;  // 10 minutes — station list changes rarely
-const LIVEBOARD_TTL_MS = 15 * 1000;             // 15 seconds — fresh enough for a live board
+const STATIONS_CACHE_TTL_MS = 10 * 60 * 1000;
+const LIVEBOARD_TTL_MS = 15 * 1000;
 
 const irailClient = axios.create({
   baseURL: 'https://api.irail.be',
@@ -16,6 +16,15 @@ let stationsCachedAt = 0;
 let stationsEtag = null;
 
 const liveboardCache = new Map();
+const liveboardInflight = new Map();
+
+// Evict stale liveboard entries every TTL interval so the Map stays bounded.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of liveboardCache) {
+    if (now - val.cachedAt >= LIVEBOARD_TTL_MS) liveboardCache.delete(key);
+  }
+}, LIVEBOARD_TTL_MS).unref();
 
 async function getStations() {
   const now = Date.now();
@@ -80,16 +89,25 @@ function searchStations(stations, query) {
 async function getLiveboard(stationAtId) {
   const now = Date.now();
   const cached = liveboardCache.get(stationAtId);
-  if (cached && now - cached.cachedAt < LIVEBOARD_TTL_MS) {
-    return cached.data;
-  }
+  if (cached && now - cached.cachedAt < LIVEBOARD_TTL_MS) return cached.data;
 
-  const response = await irailClient.get('/liveboard/', {
+  // Deduplicate concurrent requests for the same station.
+  if (liveboardInflight.has(stationAtId)) return liveboardInflight.get(stationAtId);
+
+  const promise = irailClient.get('/liveboard/', {
     params: { id: stationAtId, format: 'json', lang: 'en', alerts: 'true' },
     timeout: 6000,
+  }).then((response) => {
+    liveboardCache.set(stationAtId, { data: response.data, cachedAt: Date.now() });
+    liveboardInflight.delete(stationAtId);
+    return response.data;
+  }).catch((err) => {
+    liveboardInflight.delete(stationAtId);
+    throw err;
   });
-  liveboardCache.set(stationAtId, { data: response.data, cachedAt: Date.now() });
-  return response.data;
+
+  liveboardInflight.set(stationAtId, promise);
+  return promise;
 }
 
 function filterDepartures(departures) {
@@ -121,4 +139,8 @@ function formatDeparture(dep) {
   };
 }
 
-module.exports = { getStations, searchStations, getLiveboard, filterDepartures, formatDeparture };
+function getCacheStatus() {
+  return { stationsCached: stationsCache !== null };
+}
+
+module.exports = { getStations, searchStations, getLiveboard, filterDepartures, formatDeparture, getCacheStatus };

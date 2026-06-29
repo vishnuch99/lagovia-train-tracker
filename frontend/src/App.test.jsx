@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App.jsx';
-import { makeErrorResponse } from './test/testHelpers.js';
+import { makeErrorResponse, makeJsonResponse, makeResults } from './test/testHelpers.js';
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn());

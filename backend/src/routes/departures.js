@@ -1,13 +1,9 @@
 const express = require('express');
-const {
-  getStations,
-  searchStations,
-  getLiveboard,
-  filterDepartures,
-  formatDeparture,
-} = require('../services/irail');
+const irail = require('../services/irail');
 
 const router = express.Router();
+
+const MAX_QUERY_LENGTH = 100;
 
 /**
  * GET /departures?q=<query>
@@ -17,6 +13,7 @@ const router = express.Router();
  * Response shape:
  *   200 { query, generatedAt, stations: [{ stationId, stationName, departures[], fetchError? }] }
  *   400 { error, code: 'QUERY_TOO_SHORT' }
+ *   400 { error, code: 'QUERY_TOO_LONG' }
  *   502 { error, code: 'UPSTREAM_ERROR' }
  */
 router.get('/', async (req, res) => {
@@ -29,21 +26,28 @@ router.get('/', async (req, res) => {
     });
   }
 
+  if (query.length > MAX_QUERY_LENGTH) {
+    return res.status(400).json({
+      error: 'Query is too long',
+      code: 'QUERY_TOO_LONG',
+    });
+  }
+
   try {
-    const allStations = await getStations();
-    const matchingStations = searchStations(allStations, query);
+    const allStations = await irail.getStations();
+    const matchingStations = irail.searchStations(allStations, query);
 
     const stations = await Promise.all(
       matchingStations.map(async (station) => {
         try {
-          const liveboard = await getLiveboard(station['@id']);
+          const liveboard = await irail.getLiveboard(station['@id']);
           const raw = liveboard.departures?.departure ?? [];
           const arr = Array.isArray(raw) ? raw : [raw];
-          const filtered = filterDepartures(arr.filter((d) => d && d.time));
+          const filtered = irail.filterDepartures(arr.filter((d) => d && d.time));
           return {
             stationId: station.id,
             stationName: station.displayName,
-            departures: filtered.map(formatDeparture),
+            departures: filtered.map(irail.formatDeparture),
           };
         } catch {
           return {

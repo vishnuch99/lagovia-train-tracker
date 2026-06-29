@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertCircle, MapPin, Clock, ChevronUp, ChevronDown } from 'lucide-react';
+import { AlertCircle, MapPin, Clock, ChevronUp, ChevronDown, RefreshCw } from 'lucide-react';
 
 function StatusBadge({ delayMinutes, cancelled }) {
   if (cancelled) {
@@ -108,7 +108,7 @@ function StationCard({ station, sortDir, onToggleSort }) {
   );
 }
 
-export default function DepartureList({ results, error, isLoading }) {
+export default function DepartureList({ results, error, isLoading, showRefresh, onRefresh }) {
   const [sortDir, setSortDir] = useState('asc');
 
   function toggleSort() {
@@ -180,9 +180,18 @@ export default function DepartureList({ results, error, isLoading }) {
             minute: '2-digit',
           })}
         </span>
+        {showRefresh && (
+          <button
+            onClick={onRefresh}
+            className="ml-auto flex items-center gap-1 text-blue-600 hover:text-blue-800 transition text-xs font-medium"
+          >
+            <RefreshCw size={13} />
+            Refresh
+          </button>
+        )}
       </div>
 
-      <div className="max-h-[65vh] overflow-y-auto">
+      <div>
         {sortedStations.map((station) => (
           <StationCard
             key={station.stationId}
@@ -191,7 +200,6 @@ export default function DepartureList({ results, error, isLoading }) {
             onToggleSort={toggleSort}
           />
         ))}
-
       </div>
     </div>
   );

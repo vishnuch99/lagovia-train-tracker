@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import DepartureList from './DepartureList.jsx';
 import { makeStation, makeResults, makeDeparture } from '../test/testHelpers.js';
 
-const baseProps = { results: null, error: null, isLoading: false };
+const baseProps = { results: null, error: null, isLoading: false, showRefresh: false, onRefresh: vi.fn() };
 
 describe('DepartureList — render states', () => {
   it('C5 — isLoading + no results → spinner shown', () => {
@@ -61,5 +62,28 @@ describe('DepartureList — render states', () => {
     const headings = screen.getAllByRole('heading', { level: 2 });
     expect(headings[0]).toHaveTextContent('Active Station');
     expect(headings[1]).toHaveTextContent('Empty Station');
+  });
+});
+
+describe('DepartureList — Refresh button', () => {
+  const resultsWithStation = makeResults({
+    stations: [makeStation({ stationId: 's1', stationName: 'Gent' })],
+  });
+
+  it('C12 — Refresh button renders when showRefresh is true', () => {
+    render(<DepartureList {...baseProps} results={resultsWithStation} showRefresh={true} />);
+    expect(screen.getByRole('button', { name: /Refresh/ })).toBeInTheDocument();
+  });
+
+  it('C13 — Refresh button absent when showRefresh is false', () => {
+    render(<DepartureList {...baseProps} results={resultsWithStation} showRefresh={false} />);
+    expect(screen.queryByRole('button', { name: /Refresh/ })).not.toBeInTheDocument();
+  });
+
+  it('C14 — clicking Refresh calls onRefresh', async () => {
+    const onRefresh = vi.fn();
+    render(<DepartureList {...baseProps} results={resultsWithStation} showRefresh={true} onRefresh={onRefresh} />);
+    await userEvent.click(screen.getByRole('button', { name: /Refresh/ }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 });

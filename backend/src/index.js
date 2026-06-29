@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const departuresRouter = require('./routes/departures');
-const { getStations } = require('./services/irail');
+const { getStations, getCacheStatus } = require('./services/irail');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,7 +12,11 @@ app.use(express.json());
 
 app.use('/departures', departuresRouter);
 
-app.get('/health', (_, res) => res.json({ status: 'ok' }));
+app.get('/health', (_, res) => {
+  const { stationsCached } = getCacheStatus();
+  if (stationsCached) return res.json({ status: 'ok' });
+  res.status(503).json({ status: 'degraded', reason: 'station cache not populated' });
+});
 
 app.listen(PORT, () => {
   console.log(`Lagovia backend running on http://localhost:${PORT}`);
