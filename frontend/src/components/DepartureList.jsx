@@ -180,6 +180,7 @@ export default function DepartureList({ results, error, isLoading, showRefresh, 
           {new Date(results.generatedAt).toLocaleTimeString('en-GB', {
             hour: '2-digit',
             minute: '2-digit',
+            timeZone: 'Europe/Brussels',
           })}
         </span>
         {showRefresh && (

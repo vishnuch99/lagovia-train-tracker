@@ -28,8 +28,8 @@ export function useSearchDepartures(submission) {
     fetch(`/departures?q=${encodeURIComponent(query)}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) {
-          return res.json().then((b) =>
-            Promise.reject(new Error(FRIENDLY_ERRORS[b.code] || 'Something went wrong. Please try again.'))
+          return res.json().then((err) =>
+            Promise.reject(new Error(FRIENDLY_ERRORS[err.code] || 'Something went wrong. Please try again.'))
           );
         }
         return res.json();

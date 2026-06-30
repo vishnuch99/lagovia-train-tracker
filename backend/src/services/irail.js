@@ -66,14 +66,14 @@ function searchStations(stations, query) {
 
   const substringMatches = stations.filter(
     (s) =>
-      s.name.toLowerCase().includes(lowerQuery) ||
-      (s.standardname && s.standardname.toLowerCase().includes(lowerQuery))
+      s.name?.toLowerCase().includes(lowerQuery) ||
+      s.standardname?.toLowerCase().includes(lowerQuery)
   );
 
   if (substringMatches.length > 0) {
     return substringMatches.map((s) => ({
       ...s,
-      displayName: s.name.toLowerCase().includes(lowerQuery) ? s.name : s.standardname,
+      displayName: s.name?.toLowerCase().includes(lowerQuery) ? s.name : s.standardname,
     }));
   }
 
@@ -115,7 +115,9 @@ function filterDepartures(departures) {
   const windowEnd = nowSec + 15 * 60;
   return departures.filter((dep) => {
     const scheduled = parseInt(dep.time, 10);
-    return scheduled >= nowSec && scheduled <= windowEnd && dep.left === '0';
+    const delay = parseInt(dep.delay, 10) || 0;
+    const effectiveDeparture = scheduled + delay;
+    return effectiveDeparture >= nowSec && effectiveDeparture <= windowEnd && dep.left === '0';
   });
 }
 

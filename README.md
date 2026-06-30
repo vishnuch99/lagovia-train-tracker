@@ -133,9 +133,9 @@ Rather than fetching liveboards from iRail sequentially, we launch all liveboard
 - Each per-station fetch is wrapped in its own `try/catch`, so a single station failure never rejects the outer `Promise.all` — the UI shows a per-station error note for failures while still displaying results for all other stations.
 - While iRail does mention [API rate limits](https://docs.irail.be/#header-request-limits) in their documentation, practically the server never threw a 429 status. After verifying this by firing 100+ requests per second multiple times, the decision to fire all requests in parallel was made.
 
-### Departure window filtering
+### Display actual upcoming departures, not scheduled
 
-Departures are filtered by **scheduled** time (not actual) by taking the delay into account, as the spec states "departures scheduled within the next 15 minutes." Trains that already departed are excluded regardless of their scheduled time.
+Departures are filtered by **actual** time (not scheduled) by taking the delay into account. Thus, trains that are scheduled to leave before the time right now but have not left because of a delay will be displayed. Trains that already departed are excluded regardless of their scheduled or actual time.
 
 ### Bonus - Fuzzy search
 
@@ -143,10 +143,10 @@ Substring matching satisfies the spec. Fuzzy matching (bonus requirement) is lay
 
 ### Known Limitations
 
-- **No pagination:** If a search matches 30 stations, all are fetched in parallel and shown.
 - **No rate-limit handling:** iRail [documents](https://docs.irail.be/#header-request-limits) rate limits (3 req/s, burst of 5) but does not enforce them in practice. Thus, the backend makes all liveboard requests concurrently with no rate limiting. If limits were enforced, the Express backend will return a 502 UPSTREAM_ERROR.
 - **Time zone assumption:** Scheduled times are formatted in `Europe/Brussels`. If iRail ever returns timestamps in a different zone, this would show incorrect times.
 - **Sophisticated Error Handling:** The app does not handle each error as required (such as waiting and retrying on 502, waiting on 429, etc.). Instead, a generic error message is thrown to the frontend to notify the user. 
+- **No defensive validation of upstream data:** The application treats iRail as a trusted API and assumes documented response fields and reasonable payload sizes. It does not implement defensive measures such as maximum station name lengths, maximum station counts, or schema validation of upstream responses.
 
 ## Alternative Approach
 

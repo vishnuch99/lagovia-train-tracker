@@ -18,6 +18,9 @@ The following ideas were proposed entirely by the developer and executed with AI
 * Added conditional GET support (`ETag` / `If-None-Match`) to iRail calls.
 * Added a **Refresh** button that appears after 15 seconds to fetch fresh departure data.
 * Added more than half of the testing usecases.
+* Added sorting according to departure times and making it configurable in the UI.
+* Entire README and AI_USAGE files were revamped entirely by the developer. 
+* Changed the behaviour of filtering with actual departure time by taking delay into account, not just scheduled time.
 
 ---
 
