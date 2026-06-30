@@ -79,7 +79,8 @@ export function useSearchDepartures(submission) {
     const queryController = new AbortController();
 
     async function connect() {
-      const url = `/departures?q=${encodeURIComponent(query)}`;
+      const apiBase = import.meta.env.VITE_API_URL ?? '';
+      const url = `${apiBase}/departures?q=${encodeURIComponent(query)}`;
 
       // Connect timeout: applies only to getting the first response headers.
       // Once response.ok is confirmed we clear it so the stream reads indefinitely.
