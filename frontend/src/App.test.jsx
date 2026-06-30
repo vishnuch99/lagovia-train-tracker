@@ -13,20 +13,17 @@ afterEach(() => {
 });
 
 describe('App integration', () => {
-  it('C12 — short query triggers 400, shows "Input is incomplete"', async () => {
+  it('C12 — typing 3+ chars auto-submits after debounce without a Search button', async () => {
     fetch.mockResolvedValue(
-      makeErrorResponse({ error: 'Input is incomplete', code: 'QUERY_TOO_SHORT' }, 400)
+      makeErrorResponse({ error: 'Query is too long', code: 'QUERY_TOO_LONG' }, 400)
     );
 
     render(<App />);
     const user = userEvent.setup();
 
-    await user.type(screen.getByRole('textbox'), 'ab');
-    await user.click(screen.getByRole('button', { name: 'Search' }));
-
-    await waitFor(() =>
-      expect(screen.getByText('Input is incomplete')).toBeInTheDocument()
-    );
+    expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
+    await user.type(screen.getByRole('textbox'), 'Bru');
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
   });
 
   it('C13 — clear button appears when input has text, disappears after clear', async () => {

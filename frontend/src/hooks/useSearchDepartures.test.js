@@ -180,7 +180,7 @@ describe('HTTP 400', () => {
     );
     const sub = submission('ab');
     const { result } = renderHook(() => useSearchDepartures(sub));
-    await waitFor(() => expect(result.current.error).toBe('Input is incomplete'));
+    await waitFor(() => expect(result.current.error).toBe('Enter at least 3 characters to search.'));
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(result.current.isLoading).toBe(false);
   });

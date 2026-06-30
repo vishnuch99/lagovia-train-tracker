@@ -20,6 +20,15 @@ let stationsEtag = null; // stored ETag for conditional GET on subsequent refres
 
 // Per-station liveboard cache: stationAtId → { data, cachedAt }
 const liveboardCache = new Map();
+const liveboardInflight = new Map();
+
+// Evict stale liveboard entries every TTL interval so the Map stays bounded.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of liveboardCache) {
+    if (now - val.cachedAt >= LIVEBOARD_TTL_MS) liveboardCache.delete(key);
+  }
+}, LIVEBOARD_TTL_MS).unref();
 
 /**
  * Queue-based token bucket rate limiter — models iRail's server-side algorithm exactly.
@@ -182,8 +191,8 @@ function searchStations(stations, query) {
 
   const substringMatches = stations.filter(
     (s) =>
-      s.name.toLowerCase().includes(lowerQuery) ||
-      (s.standardname && s.standardname.toLowerCase().includes(lowerQuery))
+      s.name?.toLowerCase().includes(lowerQuery) ||
+      s.standardname?.toLowerCase().includes(lowerQuery)
   );
 
   if (substringMatches.length > 0) {
@@ -191,7 +200,7 @@ function searchStations(stations, query) {
       ...s,
       // Show whichever field contains the query — the user typed a substring of it,
       // so that's what they should see as the station title.
-      displayName: s.name.toLowerCase().includes(lowerQuery) ? s.name : s.standardname,
+      displayName: s.name?.toLowerCase().includes(lowerQuery) ? s.name : s.standardname,
     }));
   }
 
@@ -214,16 +223,24 @@ function searchStations(stations, query) {
 async function getLiveboard(stationAtId) {
   const now = Date.now();
   const cached = liveboardCache.get(stationAtId);
-  if (cached && now - cached.cachedAt < LIVEBOARD_TTL_MS) {
-    return cached.data;
-  }
+  if (cached && now - cached.cachedAt < LIVEBOARD_TTL_MS) return cached.data;
 
-  const response = await irailGet('/liveboard/', {
+  if (liveboardInflight.has(stationAtId)) return liveboardInflight.get(stationAtId);
+
+  const promise = irailGet('/liveboard/', {
     params: { id: stationAtId, format: 'json', lang: 'en', alerts: 'true' },
     timeout: 6000,
+  }).then((response) => {
+    liveboardCache.set(stationAtId, { data: response.data, cachedAt: Date.now() });
+    liveboardInflight.delete(stationAtId);
+    return response.data;
+  }).catch((err) => {
+    liveboardInflight.delete(stationAtId);
+    throw err;
   });
-  liveboardCache.set(stationAtId, { data: response.data, cachedAt: Date.now() });
-  return response.data;
+
+  liveboardInflight.set(stationAtId, promise);
+  return promise;
 }
 
 /**
@@ -236,7 +253,9 @@ function filterDepartures(departures) {
   const windowEnd = nowSec + 15 * 60;
   return departures.filter((dep) => {
     const scheduled = parseInt(dep.time, 10);
-    return scheduled >= nowSec && scheduled <= windowEnd && dep.left === '0';
+    const delay = parseInt(dep.delay, 10) || 0;
+    const effectiveDeparture = scheduled + delay;
+    return effectiveDeparture >= nowSec && effectiveDeparture <= windowEnd && dep.left === '0';
   });
 }
 
@@ -267,4 +286,8 @@ function formatDeparture(dep) {
   };
 }
 
-module.exports = { getStations, searchStations, getLiveboard, filterDepartures, formatDeparture, makeRateLimiter };
+function getCacheStatus() {
+  return { stationsCached: stationsCache !== null };
+}
+
+module.exports = { getStations, searchStations, getLiveboard, filterDepartures, formatDeparture, makeRateLimiter, getCacheStatus };

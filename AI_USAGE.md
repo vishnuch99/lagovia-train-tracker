@@ -1,8 +1,60 @@
 # AI Usage Report
 
-## Tool Used
+## Tools
 
-**Claude Code** (claude-sonnet-4-6) via the Claude.ai Claude Code interface, in an interactive agentic session. Claude Code can read files, write files, run shell commands, and maintain memory across a conversation — it was used here as the primary implementation assistant throughout the entire build.
+* **Claude Code (Claude Sonnet 4.6)** was used as the primary implementation assistant throughout the project.
+* **ChatGPT** was used for additional architecture discussions, implementation, debugging, documentation, testing, and iterative design reviews.
+
+Since Claude Code's conversations are not public, links to specific conversations cannot be shared.
+
+## Proposed by developer
+The following ideas were proposed entirely by the developer and executed with AI help.
+
+* Added `AbortController` request cancellation.
+* Added frontend timeout handling.
+* Added frontend retry logic with exponential backoff, later adapted for SSE.
+* Designed and implemented a queue-based rate limiter after referring to iRail documentation.
+* Added custom `User-Agent` to iRail calls.
+* Added conditional GET support (`ETag` / `If-None-Match`) to iRail calls.
+* Added a **Refresh** button that appears after 15 seconds to fetch fresh departure data.
+* Added more than half of the testing usecases.
+* Added sorting according to departure times and making it configurable in the UI.
+* Entire README and AI_USAGE files were revamped entirely by the developer. 
+* Changed the behaviour of filtering with actual departure time by taking delay into account, not just scheduled time.
+
+---
+
+## Accepted As-Is
+
+The following proposals from the AI were accepted without significant changes:
+
+* Overall project architecture (Express backend + React frontend)
+* Backend service separation (`irail.js` + route layer)
+* Station list caching
+* Per-station caching
+* Fuzzy search as a fallback to substring search
+* Request deduplication for concurrent liveboard fetches
+
+---
+
+## Changed
+
+The following ideas were proposed by AI but were changed by the developer.
+
+* Changed fuzzy search to execute only when no substring matches exist.
+* Changed liveboard cache TTL from 30s to 15s.
+* Changed the search flow from debounced search to explicit form submission so the backend could return the required "Input is incomplete" error.
+* Replaced the Platform column with Delay, added explicit status badges, improved empty-state handling, startup cache prefetching, station display names, and card sorting.
+* Designed and implemented a comprehensive automated test suite.
+
+---
+
+## Rejected / Not Pursued
+
+The following proposals were considered but intentionally not included in the final submission:
+
+* Consolidated JSON response from Express backend. 
+* Showing all ~714 stations on the landing page.
 
 ---
 
@@ -76,27 +128,6 @@ Implemented the full project, creating the following files from scratch:
 - `.gitignore`
 - `README.md` — full install guide, API docs, design decisions
 - `AI_USAGE.md` — this file
-
----
-
-## What Was Accepted As-Is
-
-- The full backend implementation (`irail.js`, `departures.js`, `index.js`) — the logic for filtering departures, formatting train numbers from `BE.NMBS.IC3033` → `IC3033`, using `Promise.allSettled` for parallel fetches, and the station caching pattern were all accepted without modification.
-- The frontend `useEffect` debounce pattern.
-- The Vite proxy configuration (routing `/departures` through Vite to avoid CORS in dev).
-- `totalStationsMatched` field on the response — allows the frontend to differentiate "no stations found" from "stations found but no upcoming departures."
-
-## What Was a Key Design Decision (Explained)
-
-- **Tailwind directly instead of full shadcn/ui tooling:** The user selected shadcn/ui for styling, which Claude noted is itself built on Tailwind + Radix UI. Since the shadcn/ui CLI is interactive and requires manual setup steps, and since the visual output of clean Tailwind components is identical, Claude used Tailwind v3 directly. This was documented in the README.
-
-## What Was Rejected / Not Pursued
-
-- A refresh button was considered but excluded to keep the implementation focused on the stated requirements.
-- React Context / Zustand for state management was considered and explicitly rejected — one screen, three state variables, plain `useState` is correct.
-- Pagination for large result sets was noted as a known limitation rather than implemented (not in scope).
-
----
 
 ---
 
@@ -219,7 +250,8 @@ Before implementing, did an honest analysis of all changes. Fetched the iRail do
 
 ---
 
-### Turn 11 — Rate limiting strategy analysis and implementation
+### Turn 11 — Rate limiting strategy analysis and implementation 
+Note: Rate limiting and SSE was eventually removed from the final submission. Please check `my_version` branch for this implementation. 
 
 **User prompt:**
 > "Let's talk about rate limiting now. API docs say 3 req/s and one burst of 5. So I think we should fire a max of 8 requests at first, then launch everything else at 2req/s and wait for 2 seconds to complete before firing the next batch of 8. The moment any of them returns 429, we fall back to 2req/s immediately and wait a second. My assumption is that the refill rate for bursts is 3req/s. Since the docs explicitly mention that refill happens only when we drop below 3, I chose 2. Is this a good strategy? Do you have something better? Be brutally honest. I would rather have a slow product than get banned."
@@ -327,7 +359,7 @@ Re-implemented retry logic adapted for SSE in `useSearchDepartures.js`:
 ### Turn 14 — Five spec-compliance and UX improvements
 
 **User prompt (message 1):**
-> Here is the link to the assessment: /Users/vishnu/Downloads/Technical_Challenge_Lagovia_Train_Tracker.pdf
+> Here is the link to the assessment: ***.pdf
 >
 > 1. Allow less than 3 character inputs and show an error message that says "Input is incomplete". The assessment explicitly asks for that.
 > 2. Replace "Platform" with a "delay" column to the card view. The assessment explicitly asks for that. Delay should be in minutes. If there is no delay, show 0. Make it look consistent with the other items on the card.
@@ -430,6 +462,59 @@ Implemented 48 tests across 5 test files using Vitest + React Testing Library:
 - **Backend service tests (15)** — `irail.test.mjs`: `searchStations` displayName logic (5), `filterDepartures` window + left-flag (2), `formatDeparture` output shape (3), `makeRateLimiter` timing with fake timers — burst exhaustion, per-call spacing, penalize (5).
 
 Key technical challenges: jsdom incompatibility with `ReadableStream` (solved with duck-typed mock objects); fake-timer + `waitFor` deadlock (solved by restoring real timers before waiting); CJS/ESM conflict in backend test files (solved with `.mjs` extension + `createRequire`); re-render cascade causing effect re-fires (solved by capturing `submission` outside the `renderHook` callback).
+
+---
+
+**These changes are pushed to `main` branch. `my_version` (This branch) retains SSE.**
+
+### Turn 17 — Drop SSE, switch to simple concurrent JSON API
+
+
+**User prompt:**
+> "I just tested the API with 100 requests in less than a second. There are no 429s. Let's drop SSE and switch back to a simple API. 1. Fire every request at once. All concurrently. 2. Parse everything into a single JSON and return it. No more complicated rate limiting. Delete all of that code. Keep it simple. Receive a string, find the substrings, fuzzy match if there are no direct substrings, fetch everything at once, parcel into a json and return it. The API should return just one complete JSON. Nothing else. Also plan the frontend changes to accommodate this response. Do not touch the tests for now. Let them fail. We will rewrite it next."
+
+**Claude's response (summary):**
+The entire SSE + rate-limiting architecture was removed. Five files were rewritten or simplified:
+
+**`backend/src/services/irail.js`:**
+- Deleted `makeRateLimiter` (~55 lines), `irailLimiter`, and `irailGet`.
+- `getStations()` and `getLiveboard()` now call `irailClient.get()` directly.
+- `searchStations()` restored from commented-out state (it had been replaced with `return stations;` to test "match all stations").
+- `makeRateLimiter` removed from `module.exports`.
+
+**`backend/src/routes/departures.js`:**
+- Dropped all SSE: no `text/event-stream` headers, no `send()`, no `req.on('close')` guard, no streaming `Promise.allSettled` loop.
+- New handler: validates query, calls `getStations()`, runs `Promise.allSettled` → replaced with `Promise.all` (safe because every inner promise has its own `try/catch`), returns one `res.json({ query, generatedAt, stations })`.
+- Response shape: `{ query, generatedAt: ISO string, stations: [{ stationId, stationName, departures[], fetchError? }] }`.
+
+**`frontend/src/hooks/useSearchDepartures.js`:**
+- Gutted from ~240 lines to ~40. No EventSource, no reader loop, no retry, no refs, no streaming state.
+- Plain `fetch` → `.json()` → `setResults`. `AbortController` still cancels in-flight requests when the query changes.
+- Returns `{ results, isLoading, error }`.
+
+**`frontend/src/App.jsx`:**
+- Removed `isStreaming` and `retryCount` from hook destructuring and `DepartureList` props.
+
+**`frontend/src/components/DepartureList.jsx`:**
+- Removed `TOTAL_ATTEMPTS` import, `retryCount` prop, retry message branch, `isStreaming` prop, and "Loading more stations…" footer.
+- Loading state simplified to `'Fetching departures…'`.
+- Sticky headers and sort toggle unaffected.
+
+Tests were intentionally left failing per user instruction ("We will rewrite it next").
+
+**Files changed:** `backend/src/services/irail.js`, `backend/src/routes/departures.js`, `frontend/src/hooks/useSearchDepartures.js`, `frontend/src/App.jsx`, `frontend/src/components/DepartureList.jsx`
+
+---
+
+### Turn 18 — Sort station cards by earliest departure
+
+**User prompt:**
+> "The sorting of the cards themselves is gone. The cards themselves have to be sorted according to their earliest departures. Each card then should be sorted according to departures from earliest to last."
+
+**Claude's response (summary):**
+Added a `sortedStations` array in `DepartureList` that sorts `results.stations` by each station's minimum `scheduledTimestamp` before rendering. Stations with no departures use `Infinity` as the sort key, so they fall to the bottom. Within each card, departures remain sorted by the existing `sortDir` toggle (ascending by default = earliest to latest). The sort runs in the render function — no state change needed.
+
+**Files changed:** `frontend/src/components/DepartureList.jsx`
 
 ---
 

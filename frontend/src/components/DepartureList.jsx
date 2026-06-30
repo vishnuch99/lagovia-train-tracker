@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertCircle, MapPin, Clock, ChevronUp, ChevronDown } from 'lucide-react';
+import { AlertCircle, MapPin, Clock, ChevronUp, ChevronDown, RefreshCw } from 'lucide-react';
 import { TOTAL_ATTEMPTS } from '../hooks/useSearchDepartures.js';
 
 function StatusBadge({ delayMinutes, cancelled }) {
@@ -37,14 +37,16 @@ function StationCard({ station, sortDir, onToggleSort }) {
       <div className="sticky top-0 z-10 px-4 py-3 bg-slate-50 border-b border-gray-100 flex items-center gap-2 rounded-t-xl">
         <MapPin size={15} className="text-slate-500 shrink-0" />
         <h2 className="font-semibold text-slate-800">{station.stationName}</h2>
-        <span className="ml-auto text-xs text-slate-500 shrink-0">
-          {station.departures.length} departure{station.departures.length !== 1 ? 's' : ''}
-        </span>
+        {!station.fetchError && (
+          <span className="ml-auto text-xs text-slate-500 shrink-0">
+            {station.departures.length} departure{station.departures.length !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
 
       {/* Fetch error for this station */}
       {station.fetchError && (
-        <div className="px-4 py-3 text-sm text-red-600 flex items-center gap-2">
+        <div className="px-4 py-6 text-center text-sm text-red-700 flex items-center justify-center gap-2">
           <AlertCircle size={15} className="shrink-0" />
           {station.fetchError}
         </div>
@@ -94,7 +96,7 @@ function StationCard({ station, sortDir, onToggleSort }) {
                     {dep.scheduledTime}
                   </td>
                   <td className="px-4 py-3 tabular-nums text-gray-700 whitespace-nowrap">
-                    {dep.delayMinutes} min
+                    {dep.delayMinutes === 0 ? '0 min' : `+${dep.delayMinutes} min`}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <StatusBadge delayMinutes={dep.delayMinutes} cancelled={dep.cancelled} />
@@ -119,7 +121,7 @@ function StationCard({ station, sortDir, onToggleSort }) {
  *   error                  → error banner (includes backend validation messages)
  *   idle (!results, !error, !isLoading) → search prompt
  */
-export default function DepartureList({ results, error, isLoading, isStreaming, retryCount }) {
+export default function DepartureList({ results, error, isLoading, isStreaming, retryCount, showRefresh, onRefresh }) {
   const [sortDir, setSortDir] = useState('asc');
 
   function toggleSort() {
@@ -133,7 +135,7 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
         <p className="text-sm">
           {retryCount > 0
             ? `Retrying… (attempt ${retryCount + 1} of ${TOTAL_ATTEMPTS})`
-            : 'Fetching departures…'}
+            : 'Looking up departures…'}
         </p>
       </div>
     );
@@ -153,7 +155,7 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
       <div className="text-center py-16 text-gray-400">
         <div className="text-5xl mb-4">🔍</div>
         <p className="text-lg font-medium text-gray-500">Search for a station</p>
-        <p className="text-sm mt-1 text-gray-400">Try "Bru", "Gent", "Ant", or "Liège"</p>
+        <p className="text-sm mt-1 text-gray-400">Type at least 3 characters — try "Bru", "Gent", or "Liège"</p>
       </div>
     );
   }
@@ -164,10 +166,10 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3">🚉</div>
         <p className="font-medium text-gray-600">
-          No stations found matching "{results.query}"
+          No stations found for "{results.query}"
         </p>
         <p className="text-sm mt-1 text-gray-400">
-          Try a different search term or check the spelling
+          Check the spelling, or try a different search term.
         </p>
       </div>
     );
@@ -183,15 +185,25 @@ export default function DepartureList({ results, error, isLoading, isStreaming, 
           <strong className="text-gray-700">{totalDepartures}</strong> departure
           {totalDepartures !== 1 ? 's' : ''} across{' '}
           <strong className="text-gray-700">{results.stations.length}</strong> station
-          {results.stations.length !== 1 ? 's' : ''} · as of{' '}
+          {results.stations.length !== 1 ? 's' : ''} · updated{' '}
           {new Date(results.generatedAt).toLocaleTimeString('en-GB', {
             hour: '2-digit',
             minute: '2-digit',
+            timeZone: 'Europe/Brussels',
           })}
         </span>
+        {showRefresh && (
+          <button
+            onClick={onRefresh}
+            className="ml-auto flex items-center gap-1 text-blue-600 hover:text-blue-800 transition text-xs font-medium"
+          >
+            <RefreshCw size={13} />
+            Refresh
+          </button>
+        )}
       </div>
 
-      <div className="max-h-[65vh] overflow-y-auto">
+      <div>
         {results.stations.map((station) => (
           <StationCard
             key={station.stationId}

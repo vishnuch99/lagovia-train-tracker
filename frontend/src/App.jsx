@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TrainFront } from 'lucide-react';
 import SearchBar from './components/SearchBar.jsx';
 import DepartureList from './components/DepartureList.jsx';
@@ -18,16 +18,39 @@ import { useSearchDepartures } from './hooks/useSearchDepartures.js';
 export default function App() {
   const [inputValue, setInputValue] = useState('');
   const [submission, setSubmission] = useState(null);
+  const [showRefresh, setShowRefresh] = useState(false);
 
   const { results, isLoading, isStreaming, error, retryCount } = useSearchDepartures(submission);
 
-  function handleSubmit() {
-    setSubmission({ query: inputValue, id: Date.now() });
-  }
+  // Auto-submit after 400ms of inactivity; reset immediately if input drops below 3 chars.
+  useEffect(() => {
+    const trimmed = inputValue.trim();
+    if (trimmed.length < 3) {
+      setSubmission(null);
+      return;
+    }
+    const timer = setTimeout(() => setSubmission({ query: trimmed, id: Date.now() }), 400);
+    return () => clearTimeout(timer);
+  }, [inputValue]);
+
+  // Show a Refresh button 15s after results fully arrive. Reset on new query or active stream.
+  useEffect(() => {
+    if (!results || isLoading || isStreaming) {
+      setShowRefresh(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowRefresh(true), 15_000);
+    return () => clearTimeout(timer);
+  }, [results, isLoading, isStreaming]);
 
   function handleClear() {
     setInputValue('');
     setSubmission(null);
+  }
+
+  function handleRefresh() {
+    setShowRefresh(false);
+    setSubmission((prev) => ({ query: prev.query, id: Date.now() }));
   }
 
   return (
@@ -48,7 +71,6 @@ export default function App() {
         <SearchBar
           value={inputValue}
           onChange={setInputValue}
-          onSubmit={handleSubmit}
           onClear={handleClear}
           isLoading={isLoading}
         />
@@ -58,6 +80,8 @@ export default function App() {
           isLoading={isLoading}
           isStreaming={isStreaming}
           retryCount={retryCount}
+          showRefresh={showRefresh}
+          onRefresh={handleRefresh}
         />
       </main>
     </div>

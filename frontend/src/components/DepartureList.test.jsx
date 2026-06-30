@@ -7,7 +7,7 @@ const baseProps = { results: null, error: null, isLoading: false, isStreaming: f
 describe('DepartureList — render states', () => {
   it('C5 — isLoading + no results → spinner shown', () => {
     render(<DepartureList {...baseProps} isLoading={true} />);
-    expect(screen.getByText('Fetching departures…')).toBeInTheDocument();
+    expect(screen.getByText('Looking up departures…')).toBeInTheDocument();
   });
 
   it('C6 — isLoading + retryCount > 0 → retry message', () => {
@@ -47,6 +47,6 @@ describe('DepartureList — render states', () => {
   it('C11 — zero stations + not streaming → "No stations found" message', () => {
     const results = { query: 'zzz', generatedAt: new Date().toISOString(), stations: [] };
     render(<DepartureList {...baseProps} results={results} />);
-    expect(screen.getByText(/No stations found matching/)).toBeInTheDocument();
+    expect(screen.getByText(/No stations found for/)).toBeInTheDocument();
   });
 });

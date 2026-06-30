@@ -1,5 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 
+const FRIENDLY_ERRORS = {
+  QUERY_TOO_SHORT: 'Enter at least 3 characters to search.',
+  QUERY_TOO_LONG: 'Search term is too long — try a shorter station name.',
+  UPSTREAM_ERROR: 'The Belgian railway service is unreachable right now. Please try again in a moment.',
+};
+
 export const MAX_RETRIES = 3;
 export const TOTAL_ATTEMPTS = MAX_RETRIES + 1;
 
@@ -105,7 +111,7 @@ export function useSearchDepartures(submission) {
         // Do not retry: the request was understood; the input is the problem.
         const body = await response.json().catch(() => ({}));
         if (!cancelled) {
-          setError(body.error || `Server error (${response.status})`);
+          setError(FRIENDLY_ERRORS[body.code] || 'Something went wrong. Please try again.');
           setIsLoading(false);
           setIsStreaming(false);
         }
@@ -209,7 +215,7 @@ export function useSearchDepartures(submission) {
         }
 
       } else if (data.type === 'error') {
-        setError(data.error);
+        setError(FRIENDLY_ERRORS[data.code] || data.error);
         setIsLoading(false);
         setIsStreaming(false);
       }
