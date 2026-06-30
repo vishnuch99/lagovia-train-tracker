@@ -16,7 +16,11 @@ This branch (`my_version`) extends the `main` submission with several production
 
 ---
 
-## How to Install and Run
+
+### Hosted Website
+To run the hosted deployment on GitHub pages + Vercel, go to https://vishnuch99.github.io/lagovia-train-tracker/.
+
+## How to Install and Run Locally
 
 ### Prerequisites
 - Node.js ≥ 18 (`node -v` to check)
