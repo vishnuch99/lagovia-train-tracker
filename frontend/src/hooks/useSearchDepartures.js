@@ -19,11 +19,17 @@ export function useSearchDepartures(submission) {
     setError(null);
     setResults(null);
 
+    const FRIENDLY_ERRORS = {
+      QUERY_TOO_SHORT: 'Enter at least 3 characters to search.',
+      QUERY_TOO_LONG: 'Search term is too long — try a shorter station name.',
+      UPSTREAM_ERROR: 'The Belgian railway service is unreachable right now. Please try again in a moment.',
+    };
+
     fetch(`/departures?q=${encodeURIComponent(query)}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) {
           return res.json().then((b) =>
-            Promise.reject(new Error(b.error || `Server error (${res.status})`))
+            Promise.reject(new Error(FRIENDLY_ERRORS[b.code] || 'Something went wrong. Please try again.'))
           );
         }
         return res.json();
@@ -34,7 +40,10 @@ export function useSearchDepartures(submission) {
       })
       .catch((err) => {
         if (err.name === 'AbortError') return;
-        setError(err.message);
+        const message = err instanceof TypeError
+          ? 'Unable to connect. Please check your connection and try again.'
+          : err.message;
+        setError(message);
         setIsLoading(false);
       });
 

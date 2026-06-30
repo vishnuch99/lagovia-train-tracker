@@ -25,7 +25,7 @@ describe('App integration', () => {
     await user.click(screen.getByRole('button', { name: 'Search' }));
 
     await waitFor(() =>
-      expect(screen.getByText('Input is incomplete')).toBeInTheDocument()
+      expect(screen.getByText('Enter at least 3 characters to search.')).toBeInTheDocument()
     );
   });
 

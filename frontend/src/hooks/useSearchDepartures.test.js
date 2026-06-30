@@ -50,13 +50,13 @@ describe('null submission', () => {
 // ---------------------------------------------------------------------------
 
 describe('HTTP 400', () => {
-  it('F4 — 400 response shows exact backend error message, no retry', async () => {
+  it('F4 — 400 QUERY_TOO_SHORT → friendly message, no retry', async () => {
     fetch.mockResolvedValue(
       makeErrorResponse({ error: 'Input is incomplete', code: 'QUERY_TOO_SHORT' }, 400)
     );
     const sub = { query: 'ab', id: 1 };
     const { result } = renderHook(() => useSearchDepartures(sub));
-    await waitFor(() => expect(result.current.error).toBe('Input is incomplete'));
+    await waitFor(() => expect(result.current.error).toBe('Enter at least 3 characters to search.'));
     expect(result.current.isLoading).toBe(false);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -116,7 +116,7 @@ describe('network failure', () => {
 // ---------------------------------------------------------------------------
 
 describe('upstream error', () => {
-  it('F8 — 502 response → exact backend error message shown', async () => {
+  it('F8 — 502 UPSTREAM_ERROR → friendly message shown', async () => {
     fetch.mockResolvedValue(
       makeErrorResponse(
         { error: 'Failed to reach the iRail upstream API', code: 'UPSTREAM_ERROR' },
@@ -126,16 +126,16 @@ describe('upstream error', () => {
     const sub = { query: 'Bru', id: 1 };
     const { result } = renderHook(() => useSearchDepartures(sub));
     await waitFor(() => expect(result.current.error).toBeTruthy());
-    expect(result.current.error).toBe('Failed to reach the iRail upstream API');
+    expect(result.current.error).toBe('The Belgian railway service is unreachable right now. Please try again in a moment.');
     expect(result.current.isLoading).toBe(false);
   });
 
-  it('F9 — non-OK response with no error field → generic fallback message', async () => {
+  it('F9 — non-OK response with unknown code → generic fallback message', async () => {
     fetch.mockResolvedValue(makeErrorResponse({}, 500));
     const sub = { query: 'Bru', id: 1 };
     const { result } = renderHook(() => useSearchDepartures(sub));
     await waitFor(() => expect(result.current.error).toBeTruthy());
-    expect(result.current.error).toBe('Server error (500)');
+    expect(result.current.error).toBe('Something went wrong. Please try again.');
   });
 });
 

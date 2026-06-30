@@ -18,27 +18,14 @@ npm install            # installs concurrently for the root dev script
 npm run install:all    # installs backend and frontend dependencies
 ```
 
-Or install them separately:
-```bash
-cd backend && npm install
-cd ../frontend && npm install
-```
-
-### Run in development
+### Run
 
 ```bash
-# From the project root — starts both servers with colour-coded output:
+# From the project root — starts both backend and frontend:
 npm run dev
 ```
 
-- Backend: http://localhost:3001
-- Frontend: http://localhost:5173
-
-Or run them in separate terminals:
-```bash
-cd backend && npm run dev     # nodemon — auto-restarts on file changes
-cd frontend && npm run dev    # Vite dev server with HMR
-```
+Once the servers are up and running, open `http://localhost:5173` to access the demo. 
 
 ---
 
@@ -50,6 +37,8 @@ Returns upcoming departures (next 15 minutes) from every station whose name cont
 
 **Query constraints:**
 - Fewer than 3 characters → `400 QUERY_TOO_SHORT`
+- More than 100 characters → `400 QUERY_TOO_LONG`
+- Cannot reach iRail → `502 UPSTREAM_ERROR`
 
 **Success response (`200 OK`):**
 ```json
@@ -71,6 +60,12 @@ Returns upcoming departures (next 15 minutes) from every station whose name cont
           "platform": "3"
         }
       ]
+    },
+    {
+      "stationId": "BE.NMBS.008821006",
+      "stationName": "Brussels-North",
+      "departures": [],
+      "fetchError": "Could not load departures for this station"
     }
   ]
 }
@@ -83,43 +78,82 @@ Returns upcoming departures (next 15 minutes) from every station whose name cont
 { "error": "Failed to reach the iRail upstream API", "code": "UPSTREAM_ERROR" }
 ```
 
-**Health check:** `GET /health` → `{ "status": "ok" }`
-
 ---
 
-## Decisions, Trade-offs, and Known Limitations
 
-### Architecture
+## Architecture
 
-The app is split into a Node.js/Express backend and a React frontend. The backend acts as a proxy to iRail for two reasons: (1) iRail does not send CORS headers, so browsers cannot call it directly; (2) keeping API logic on the server means the client stays dumb — it only renders what it receives.
+![Architecture diagram](./architecture_diagram.png)
 
-### Station caching
+The app uses the following frameworks for each of the components.
 
-The full station list (~600 entries) is fetched from iRail once and cached in memory for 10 minutes. The list changes very rarely (new stations are opened every few years), so a 10-minute TTL is a reasonable trade-off between freshness and unnecessary API calls. A production system would use Redis; for this scope, a module-level variable is sufficient.
+| Component                        | Framework / Library             |
+|----------------------------------|---------------------------------|
+| Frontend UI                      | React                           |
+| Frontend build & dev server      | Vite                            |
+| Styling                          | Tailwind CSS                    |
+| Icons                            | Lucide React                    |
+| Backend server                   | Express                         |
+| HTTP client                      | Axios                           |
+| Fuzzy search                     | Fuse.js                         |
+| Tests                            | Vitest + Supertest              |
+
+### Sequence Diagram
+
+![Sequence diagram](./sequence_diagram.png)
+1. Express backend prefetches the list of stations and caches them in memory for 10 minutes.
+2. User types and submits a query in the browser.
+3. React hook fires GET /departures?q=Bru to Express.
+4. Using the cached stations list, Express finds the list of stations that contain the query in their name / standard name.
+5. If there are no direct substring matches, Express checks for fuzzy matching.
+6. Express fires parallel requests to iRail to fetch the liveboards of each station. 
+7. Each liveboard response is cached and filtered. The data is held in cache for 15 seconds. 
+8. Each query is checked for duplicate requests. If there are any in flight, the query is held for the result and is not fired.
+9. All the responses of all the requests are consolidated into a JSON. Any failures in upstream are handled separately and are denoted in the response accordingly.
+10. Once Frontend receives the response, each station's data is rendered in a separate card.
+11. Each departures of each station are sorted according to their departure times. The station cards themselves are sorted according to their earliest departures, and then alphabetically. Stations with no departures are shown at the bottom.
+12. After 15 seconds, the Refresh button appears to allow the user to fetch fresh data.
+13. On clearing the search box, the previous results disappear and the app is ready for a new query.
+
+## Decisions and Tradeoffs
+
+### Caching strategy
+
+1. The full station list (~714 entries) is prefetched by the Express backend from iRail and cached in memory for 10 minutes. 
+- Since this is a prerequisite that rarely changes for any user query, the slight tradeoff of prefetching and caching should essentially be ignored.
+
+2. When a user submits a query, the liveboard of every matching station is fetched in parallel and cached in memory for 15 seconds.
+- This keeps the backend from hitting the iRail API repeatedly and prevents redundant information. 
+- Since the departure time is expressed in HH:MM, a TTL of 15 seconds keeps data reasonably fresh.
+- A periodic interval job that runs every 15 seconds removes all the stale entries in cache.
 
 ### Parallel liveboard fetches with `Promise.all`
 
-Searching "Bru" can match 5–10 stations. Rather than fetching them sequentially, we launch all liveboard requests concurrently with `Promise.all`. Each per-station fetch is wrapped in its own `try/catch`, so a single station failure never rejects the outer `Promise.all` — the UI shows a per-station error note while still displaying results for all other stations.
-
-### Fuzzy search
-
-Substring matching satisfies the spec. Fuzzy matching (bonus requirement) is layered on top using [Fuse.js](https://fusejs.io/): results that don't match by substring are checked against a fuzzy index and appended. The threshold (0.35) was chosen to catch common typos without producing wildly irrelevant results.
+Rather than fetching liveboards from iRail sequentially, we launch all liveboard requests concurrently with `Promise.all`. 
+- Each per-station fetch is wrapped in its own `try/catch`, so a single station failure never rejects the outer `Promise.all` — the UI shows a per-station error note for failures while still displaying results for all other stations.
+- While iRail does mention [API rate limits](https://docs.irail.be/#header-request-limits) in their documentation, practically the server never threw a 429 status. After verifying this by firing 100+ requests per second multiple times, the decision to fire all requests in parallel was made.
 
 ### Departure window filtering
 
-Departures are filtered by **scheduled** time (not actual = scheduled + delay), as the spec states "departures scheduled within the next 15 minutes." Trains already departed (`left === '1'`) are excluded regardless of their scheduled time.
+Departures are filtered by **scheduled** time (not actual) by taking the delay into account, as the spec states "departures scheduled within the next 15 minutes." Trains that already departed are excluded regardless of their scheduled time.
 
-### Frontend state management
+### Bonus - Fuzzy search
 
-All state lives in `App.jsx` and is passed to children as props. React Context or a state manager (Zustand, Redux) would be overkill for an app with one screen and three pieces of state.
-
-### Styling
-
-Tailwind CSS v3 is used directly rather than adding the full shadcn/ui tooling layer. shadcn/ui is built on Tailwind + Radix UI; using Tailwind directly achieves the same visual result without the interactive setup steps and generated file overhead.
+Substring matching satisfies the spec. Fuzzy matching (bonus requirement) is layered on top using [Fuse.js](https://fusejs.io/): results that don't match by substring are checked against a fuzzy index and appended. The threshold (0.35) was chosen to catch common typos without producing wildly irrelevant results.
 
 ### Known Limitations
 
-- **No pagination:** If a search matches 30 stations, all are fetched and shown. In practice this is rare, but a busy query could generate many parallel iRail calls.
-- **No rate-limit handling:** iRail documents rate limits (3 req/s, burst of 5) but does not enforce them in practice. The backend makes all liveboard requests concurrently with no throttling. If limits were enforced, the backend would return a 502 UPSTREAM_ERROR.
-- **Station cache is per-process:** Multiple backend instances would each maintain their own cache. A shared cache (Redis) would be needed for horizontal scaling.
+- **No pagination:** If a search matches 30 stations, all are fetched in parallel and shown.
+- **No rate-limit handling:** iRail [documents](https://docs.irail.be/#header-request-limits) rate limits (3 req/s, burst of 5) but does not enforce them in practice. Thus, the backend makes all liveboard requests concurrently with no rate limiting. If limits were enforced, the Express backend will return a 502 UPSTREAM_ERROR.
 - **Time zone assumption:** Scheduled times are formatted in `Europe/Brussels`. If iRail ever returns timestamps in a different zone, this would show incorrect times.
+- **Sophisticated Error Handling:** The app does not handle each error as required (such as waiting and retrying on 502, waiting on 429, etc.). Instead, a generic error message is thrown to the frontend to notify the user. 
+
+## Alternative Approach
+
+The `main` branch is my official submission and intentionally follows the requirements of the assessment as closely as possible.
+
+As an alternative, I also implemented a version on the `my_version` branch that uses **Server-Sent Events (SSE)** to progressively stream results to the frontend instead of waiting for a complete response.
+
+While this introduces slightly more implementation complexity, I believe it is a more production-oriented design. Progressive rendering improves perceived responsiveness for larger searches, and the backend can naturally pace requests to the iRail API, respecting the documented rate limits and reducing the risk of being rate-limited or blocked if those limits are enforced in the future.
+
+I chose not to submit this version as the primary implementation because the assessment explicitly requests a single JSON endpoint, and I wanted the official submission to align as closely as possible with the stated requirements.

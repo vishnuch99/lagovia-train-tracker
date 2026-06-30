@@ -9,7 +9,7 @@ const baseProps = { results: null, error: null, isLoading: false, showRefresh: f
 describe('DepartureList — render states', () => {
   it('C5 — isLoading + no results → spinner shown', () => {
     render(<DepartureList {...baseProps} isLoading={true} />);
-    expect(screen.getByText('Fetching departures…')).toBeInTheDocument();
+    expect(screen.getByText('Looking up departures…')).toBeInTheDocument();
   });
 
   it('C6 — error prop → error banner with the message', () => {
@@ -25,7 +25,7 @@ describe('DepartureList — render states', () => {
   it('C8 — zero stations → "No stations found" message', () => {
     const results = makeResults({ query: 'zzz', stations: [] });
     render(<DepartureList {...baseProps} results={results} />);
-    expect(screen.getByText(/No stations found matching/)).toBeInTheDocument();
+    expect(screen.getByText(/No stations found for/)).toBeInTheDocument();
   });
 
   it('C9 — results with stations → station name rendered', () => {
